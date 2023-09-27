@@ -1,0 +1,452 @@
+---
+title: 'Homework 1'
+subtitle: ''
+author: 'Daria Dubovskaia'
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    theme: united
+  pdf_document:
+    toc: yes
+editor_options:
+  chunk_output_type: console
+  markdown: 
+    wrap: sentence
+---
+
+
+```{r setup, include=FALSE}
+# chunks
+knitr::opts_chunk$set(echo=FALSE, eval=TRUE, include=TRUE, 
+message=FALSE, warning=FALSE, fig.height=5, fig.align='center')
+
+# libraries
+library(tidyverse)
+library(kableExtra)
+library(summarytools)
+library(MASS) # glm.nb()
+library(mice)
+library(lubridate)
+library(splusTimeDate)
+library(pscl) # zeroinfl()
+library(skimr)
+library(sjPlot)
+library(mpath)
+library(yardstick)
+library(labelled)
+library(haven)
+library(corrplot)
+library(Hmisc)
+library(jtools)
+library(caret)
+library(broom)
+
+ # library
+library(treemap)
+library(ggplot2)
+library(hrbrthemes)
+library(viridis)
+library(vip)
+
+library(ggpubr)
+library(rockchalk)
+
+
+
+# ggplot
+theme_set(theme_light())
+
+
+# random seed
+set.seed(42)
+```
+
+
+
+# Overview
+
+------------------------------------------------------------------------
+
+## 1. Data Exploration and Preparation
+
+The **small** dataset contained `r nrow(df_1000)` observations of 17 predictor variables. 
+The **large** dataset contained `r nrow(df_50000)` observations over the same predictor variables.
+Each record in both datasets describes a single sales transaction in full, including the product type, sales channel, financial data, and pertinent dates. Specifically:
+
+-    `Region`: Geographical region where the sale occurred
+-    `Country`: Country where the sale occurred
+-    `Item Type`: Type of product sold (e.g. Cereal, Cosmetics, Fruits, etc.)
+-    `Sales Channel`: How the sale was made (Offline/Online)
+-    `Order Priority`: Priority of the order (e.g., M for medium, C for critical, H for high, etc.)
+-    `Order Date`: Date when the order was placed
+-    `Order ID`: Unique identifier for the order
+-    `Ship Date`: Date when the product was shipped
+-    `Units Sold`: Number of units sold
+-    `Unit Price`: Price per unit of the product
+-    `Unit Cost`: Cost per unit of the product
+-    `Total Revenue`: Total revenue from the sale
+-    `Total Cost`: Total cost of the sale
+-    `Total Profit`: Total profit from the sale
+
+
+```{r data_load}
+# load data
+df_1000 <- read.csv("C:/Users/daria/Downloads/1000 Sales Records.csv")
+df_50000 <- read.csv("C:/Users/daria/Downloads/50000 Sales Records.csv")
+``` 
+
+
+
+### 1.1 Summary Statistics
+```{r head_data_small}
+DT::datatable(
+      df_1000[1:25,],
+      extensions = c('Scroller'),
+      options = list(scrollY = 350,
+                     scrollX = 500,
+                     deferRender = TRUE,
+                     scroller = TRUE,
+                     dom = 'lBfrtip',
+                     fixedColumns = TRUE, 
+                     searching = FALSE), 
+      rownames = FALSE) 
+```
+
+```{r head_data_large}
+DT::datatable(
+      df_50000[1:25,],
+      extensions = c('Scroller'),
+      options = list(scrollY = 350,
+                     scrollX = 500,
+                     deferRender = TRUE,
+                     scroller = TRUE,
+                     dom = 'lBfrtip',
+                     fixedColumns = TRUE, 
+                     searching = FALSE), 
+      rownames = FALSE) 
+```
+
+
+```{r summary_small}
+DT::datatable(
+      dfSummary(df_1000, text.graph.col = FALSE, graph.col = FALSE),
+      extensions = c('Scroller'),
+      options = list(scrollY = 350,
+                     scrollX = 500,
+                     deferRender = TRUE,
+                     scroller = TRUE,
+                     dom = 'lBfrtip',
+                     fixedColumns = TRUE, 
+                     searching = FALSE), 
+      rownames = FALSE) 
+
+```
+
+```{r summary_large}
+DT::datatable(
+      dfSummary(df_50000, text.graph.col = FALSE, graph.col = FALSE),
+      extensions = c('Scroller'),
+      options = list(scrollY = 350,
+                     scrollX = 500,
+                     deferRender = TRUE,
+                     scroller = TRUE,
+                     dom = 'lBfrtip',
+                     fixedColumns = TRUE, 
+                     searching = FALSE), 
+      rownames = FALSE) 
+
+```
+
+### 1.2 Column change, New columns
+
+
+Change column names to lower case, substitute " " with "_".
+```{rcol_name_function}
+ 
+# This function changes the column names of a data frame to lower case and substitutes dots with underscores
+#
+# PARAMETERS:
+#   - df: The input data frame
+#     TYPE: data frame
+#
+# RETURNS:
+#   - The modified data frame with column names substituted
+#     TYPE: data frame
+#
+# EXCEPTIONS:
+#   - This function assumes that the input is a valid data frame and does not handle other types of inputs
+
+change_column_names <- function(df) {
+  # Get the current column names of the data frame
+  
+  colnames(df) <- colnames(df)  %>%
+  str_to_lower()  %>%
+  str_replace_all("\\.", "_")
+  
+  # Return the modified data frame
+  return(df)
+}
+```
+
+```{r col_name}
+# Change column names, lower case, substitute "." with "_"
+df_1000 <- change_column_names(df_1000)
+df_50000 <- change_column_names(df_50000)
+```
+
+Change columns Order Date and Ship Date to date format
+
+```{r to_date_function}
+
+# This function transforms a character column from a dataset in the format "dd/mm/yyyy" to a date format
+#
+# PARAMETERS:
+#   - df: A data frame containing the dataset
+#     TYPE: data frame
+#
+# RETURNS:
+#   - The input data frame with the specified column transformed to a date format
+#     TYPE: data frame
+#
+# EXCEPTIONS:
+#   - This function assumes that the character column contains valid dates in the format "dd/mm/yyyy"
+#     It does not handle missing values or invalid date formats
+
+
+	transform_date_columns <- function(df) {
+  # Get the column names of the dataframe
+  column_names <- colnames(df)
+  
+  # Iterate over each column in the dataframe
+  for (column_name in column_names) {
+    # Check if the column is of character type
+    if (is.character(df[[column_name]])) {
+      # Check if the column values are in the format dd/mm/yyyy
+      if (any(grepl("^\\d{2}/\\d{2}/\\d{4}$", df[[column_name]]))) {
+        # Transform the column values to the date format, %Y to show years 2000–2068 properly
+        df[[column_name]] <- as.Date(df[[column_name]], format="%m/%d/%Y")
+      }
+    }
+  }
+  
+  # Return the transformed dataframe
+  return(df)
+}
+```
+
+```{r to_date}
+# Transform the character column to a date format
+df_1000 <- transform_date_columns(df_1000)
+df_50000 <- transform_date_columns(df_50000)
+```
+
+New columns factor Quarter, dummy Weekend, dummy for sales channel
+
+```{r col_quarter_function}
+#   This function adds a new column called "quarter" to a data frame based on the values in a date column
+#   The "quarter" column represents the quarter of the year corresponding to each date
+#
+# PARAMETERS:
+#   - df: The input data frame
+#     TYPE: data frame
+#
+#   - date_column: The name of the date column in the input data frame
+#     TYPE: date
+#
+# RETURNS:
+#   - The input data frame with an additional "quarter" column
+#     TYPE: data frame
+#
+# EXCEPTIONS:
+#   - This function assumes that the input data frame contains a valid date column
+#   - If the date column is not found in the input data frame, an error will be thrown
+#
+
+	add_quarter_column <- function(df, date_column) {
+  # Check if the date column exists in the input data frame
+  if (!(date_column %in% colnames(df))) {
+    stop("Date column not found in the input data frame.")
+  }
+  
+  # Extract the quarter from the date column using lubridate::quarter function
+  df$quarter <- factor(quarter(df[[date_column]]))
+  
+  # Return the modified data frame with the additional "quarter" column
+  return(df)
+}
+```
+
+```{r col_weekend_function}
+#   This function takes a dataframe as input and adds a new column indicating whether the day of the order date
+#   is a weekend or not. If the day is a weekend, the value in the new column will be 1, otherwise it will be 0
+#
+# PARAMETERS:
+#   - df: The input dataframe containing the order date column
+#     TYPE: dataframe
+#
+#   - date_col: The name of the column in the dataframe that contains the order dates
+#     TYPE: date
+#
+# RETURNS:
+#   - The input dataframe with an additional column indicating whether the day is a weekend or not
+#     TYPE: dataframe
+#
+# EXCEPTIONS:
+#   - This function assumes that the order date column is in the correct format (YYYY-MM-DD) and does not handle
+#     invalid date formats.
+#   - This function assumes that the order date column contains valid dates and does not handle missing or null values
+
+ 
+add_weekend_indicator <- function(df, date_col) {
+
+  # Create a new column to store the weekend indicator
+  df$is_weekend <- factor(ifelse(weekdays(df[[date_col]]) %in% c("Saturday", "Sunday"), 1, 0))
+  
+  # Return the modified dataframe
+  return(df)
+}
+
+```
+
+```{r col_online_function}
+# This function creates a dummy variable based on the values of a specified column in a data frame
+# If the sales channel is a online, the value in the new column will be 1, otherwise it will be 0
+#
+# PARAMETERS:
+#   - data: The data frame containing the column to create the dummy variable from
+#     TYPE: data frame
+#
+#   - channel_column: The name of the column in the data frame to create the dummy variable from
+#     TYPE: character
+#
+# RETURNS:
+#   - The modified data frame with the dummy variable added as a new column
+#     TYPE: data frame
+
+#
+# EXCEPTIONS:
+#   - This function assumes that the specified column exists in the data frame
+#   - This function assumes that the specified column contains values of either "Online" or "Offline"
+
+add_online_indicator <- function(df, channel_column) {
+  # Check if the specified column exists in the data frame
+  if (!(channel_column %in% colnames(df))) {
+    stop("Specified column does not exist in the data frame.")
+  }
+  
+  # Create the dummy variable 'is_online'
+  df$is_online <- factor(ifelse(df[[channel_column]] == "Online", 1, 0))
+  
+  # Return the modified data frame
+  return(df)
+}
+```
+
+
+```{r new_columns}
+# Create new columns quarter, is_weekend, is_online
+df_1000 <- df_1000 %>%
+          add_quarter_column("order_date") %>%
+          add_weekend_indicator("order_date") %>%
+          add_online_indicator("sales_channel")
+
+df_50000 <- df_50000 %>%
+          add_quarter_column("order_date") %>%
+          add_weekend_indicator("order_date") %>%
+          add_online_indicator("sales_channel")
+```
+
+
+
+Character columns to factor 
+
+```{r to_factor_function}
+# This function takes a data frame as input and transforms all character columns to factor columns
+#
+# PARAMETERS:
+#   - df: A data frame
+#     TYPE: data.frame
+#
+# RETURNS:
+#   - The transformed data frame with character columns converted to factor columns
+#     TYPE: data.frame
+#
+# EXCEPTIONS:
+#   - This function assumes that all character columns in the data frame can be safely converted to factors
+#   - If a column contains non-character values, an error may occur
+
+transform_character_columns <- function(df) {
+  # Identify the character columns in the data frame
+  char_cols <- sapply(df, is.character)
+  
+  # Transform the character columns to factor columns
+  df[char_cols] <- lapply(df[char_cols], as.factor)
+  
+  # Return the transformed data frame
+  return(df)
+}
+```
+
+```{r to_factor}
+# Transform to factor character columns
+df_1000 <- transform_character_columns(df_1000)
+df_50000 <- transform_character_columns(df_50000)
+```
+
+
+Order ID to character
+
+```{r to_character_function}
+# This function takes a data frame as input and transforms a numeric column to a character column
+#
+# PARAMETERS:
+#   - df: A data frame
+#     TYPE: data.frame
+#
+# RETURNS:
+#   - The transformed data frame with a numeric column converted to a character column
+#     TYPE: data.frame
+#
+# EXCEPTIONS:
+#   - This function assumes that any numeric column in the data frame can be safely converted to characters
+#   - If a column contains non-numeric values, an error may occur
+
+transform_numeric_column <- function(df, num_column) {
+  
+  # Transform the numeric column to a character column
+  df[num_column] <- lapply(df[num_column], as.character)
+  
+  # Return the transformed data frame
+  return(df)
+}
+```
+
+```{r to_character}
+# Transform from numeric to character order_id column
+df_1000 <- transform_numeric_column(df_1000, "order_id")
+df_50000 <- transform_numeric_column(df_50000, "order_id")
+```
+
+Summary for the updated data
+
+
+```{r summary}
+DT::datatable(
+      dfSummary(df_1000, text.graph.col = FALSE, graph.col = FALSE),
+      extensions = c('Scroller'),
+      options = list(scrollY = 350,
+                     scrollX = 500,
+                     deferRender = TRUE,
+                     scroller = TRUE,
+                     dom = 'lBfrtip',
+                     fixedColumns = TRUE, 
+                     searching = FALSE), 
+      rownames = FALSE) 
+
+```
+
+
+
+
+
