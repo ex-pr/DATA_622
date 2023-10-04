@@ -22,83 +22,107 @@ knitr::opts_chunk$set(echo=FALSE, eval=TRUE, include=TRUE,
 message=FALSE, warning=FALSE, fig.height=5, fig.align='center')
 
 # libraries
+library(ranger)
+library(glmnet)
+library(pROC)
+library(recipes)
+library(viridis)
 library(tidyverse)
+library(doParallel)
 library(kableExtra)
+library(caTools)
+library(reshape)
 library(summarytools)
+library(gridExtra)
+library(superml)
 library(MASS) # glm.nb()
 library(mice)
 library(lubridate)
-library(splusTimeDate)
-library(pscl) # zeroinfl()
 library(skimr)
 library(sjPlot)
 library(mpath)
 library(yardstick)
+library(mlr)
+library(randomForest)
+library(LiblineaR)
 library(labelled)
 library(haven)
 library(corrplot)
 library(Hmisc)
 library(jtools)
+library(glmnet)
 library(caret)
 library(broom)
 
- # library
 library(treemap)
 library(ggplot2)
 library(hrbrthemes)
 library(viridis)
+library(rpart)
+library(rpart.plot)
 library(vip)
 
 library(ggpubr)
 library(rockchalk)
-
-
-
-# ggplot
-theme_set(theme_light())
+library(nnet)
 
 
 # random seed
 set.seed(42)
+
+Sys.setlocale("LC_ALL","English")
 ```
 
 
 
-# Overview
+## Overview
+
+
+A sales strategy's success and efficiency can be influenced by a variety of elements, including product type, geography, sales channel, and seasonality, to mention a few. Prioritization of sales is an important component that is frequently disregarded. Understanding which sales to prioritize in the fast-paced world of sales can dramatically optimize resource allocation and increase overall sales performance. Sales with a high priority often necessitate fast response and can result in large income or customer retention. 
+
+Predicting the priority of sales in the large terrain of sales activities, particularly in a global setting, can be difficult. A sale's priority level can be influenced by factors such as the region of sale, the type of goods, the sales channel, and even the time of year. Businesses are expanding their sales into new markets as marketplaces become more globalized, each with its own set of problems and dynamics. Furthermore, the introduction of internet sales platforms has introduced a new degree of complexity to the sales process.
+
+This study dives deeply into the prediction of sales prioritization. We hope to forecast whether a specific sale will have a vital priority by analyzing data from thousands of sales histories. The predictor variables include a variety of characteristics such as the sale region, item type, sales channel, and time-related parameters such as the month and year of the sale.
+
+To rigorously test our forecasting abilities, we will build different machine learning models using various methodologies and feature selections. Our data was rigorously partitioned into training and testing sets using an 80/20 split for a robust evaluation. We will deploy our revised models on an independent evaluation dataset devoid of the target variable following model training and internal validation, assuring an unbiased assessment of our prediction prowess.
+
 
 ------------------------------------------------------------------------
 
-## 1. Data Exploration and Preparation
-
-The **small** dataset contained `r nrow(df_1000)` observations of 17 predictor variables. 
-The **large** dataset contained `r nrow(df_50000)` observations over the same predictor variables.
-Each record in both datasets describes a single sales transaction in full, including the product type, sales channel, financial data, and pertinent dates. Specifically:
-
--    `Region`: Geographical region where the sale occurred
--    `Country`: Country where the sale occurred
--    `Item Type`: Type of product sold (e.g. Cereal, Cosmetics, Fruits, etc.)
--    `Sales Channel`: How the sale was made (Offline/Online)
--    `Order Priority`: Priority of the order (e.g., M for medium, C for critical, H for high, etc.)
--    `Order Date`: Date when the order was placed
--    `Order ID`: Unique identifier for the order
--    `Ship Date`: Date when the product was shipped
--    `Units Sold`: Number of units sold
--    `Unit Price`: Price per unit of the product
--    `Unit Cost`: Cost per unit of the product
--    `Total Revenue`: Total revenue from the sale
--    `Total Cost`: Total cost of the sale
--    `Total Profit`: Total profit from the sale
-
+## 1. Data Preparation
 
 ```{r data_load}
 # load data
-df_1000 <- read.csv("C:/Users/daria/Downloads/1000 Sales Records.csv")
-df_50000 <- read.csv("C:/Users/daria/Downloads/50000 Sales Records.csv")
+df_1000 <- read.csv("https://raw.githubusercontent.com/ex-pr/DATA_622/main/HW%201/1000%20Sales%20Records.csv")
+df_50000 <- read.csv("https://raw.githubusercontent.com/ex-pr/DATA_622/main/HW%201/50000%20Sales%20Records.csv")
 ``` 
 
 
 
 ### 1.1 Summary Statistics
+The **small** dataset contained **1000** observations of 17 predictor variables.  
+
+The **large** dataset contained **50000** observations over the same predictor variables. 
+
+Each record in both datasets described a single sales transaction in full, including the product type, sales channel, financial data, and pertinent dates. Specifically:
+
+-    `Region`: Geographical region where the sale occurred (e.g. Asia, Europe, North America, etc.)
+-    `Country`: The country where the sale took place
+-    `Item Type`: Type of product sold (e.g. Cereal, Cosmetics, Fruits, etc.)
+-    `Sales Channel`: The method through which the sale was made (offline/online)
+-    `Order Priority`: The order's priority (e.g., M for medium, C for critical, H for high, etc.)
+-    `Order Date`: The date the order was placed
+-    `Order ID`:A unique identifier for the order
+-    `Ship Date`: The date the product was shipped
+-    `Units Sold`: The number of units sold
+-    `Unit Price`:The price per unit of the product 
+-    `Unit Cost`: The cost per unit of the product
+-    `Total Revenue`: The total revenue from the sale
+-    `Total Cost`: The total cost of the transaction
+-    `Total Profit`:  The total profit from the sale
+
+The target variable `Critical Priority` would be deployed from the `Order Priority`. The value of the target would be 1 for a critical order priority, 0 for a medium, low or high priority.
+
 ```{r head_data_small}
 DT::datatable(
       df_1000[1:25,],
@@ -127,254 +151,207 @@ DT::datatable(
       rownames = FALSE) 
 ```
 
+The table below provided a summary statistics for both datasets. There were no missing values in both.
 
-```{r summary_small}
-DT::datatable(
-      dfSummary(df_1000, text.graph.col = FALSE, graph.col = FALSE),
-      extensions = c('Scroller'),
-      options = list(scrollY = 350,
-                     scrollX = 500,
-                     deferRender = TRUE,
-                     scroller = TRUE,
-                     dom = 'lBfrtip',
-                     fixedColumns = TRUE, 
-                     searching = FALSE), 
-      rownames = FALSE) 
+Variables `Units Sold`, `Total Cost`, `Total Profit` had a wide range and could be a source of potential issue when building the models, scaling would be a solution for these variables.
 
+It would be expected if the 50000 sales data would provide more variability and more unique values in categorical columns, but there were almost the same mean and median values for `Units Sold`, `Total Cost`, `Total Profit` and `Total Profit` in both datasets.
+
+The small and large datasets used in the assignment, they both could introduce errors:
+
+`Large Data`: could lead to overfitting. In this case, we might consider using regularization and validation techniques.
+
+`Small Data`: could lead to underfitting. We also could get a high variance in predictions.
+
+```{r}
+print(dfSummary(df_1000, text.graph.col = FALSE, graph.col = FALSE, style = "grid", valid.col = FALSE), headings = FALSE, max.tbl.height = 300, footnote = NA, col.width=50, method="render")
 ```
 
 ```{r summary_large}
-DT::datatable(
-      dfSummary(df_50000, text.graph.col = FALSE, graph.col = FALSE),
-      extensions = c('Scroller'),
-      options = list(scrollY = 350,
-                     scrollX = 500,
-                     deferRender = TRUE,
-                     scroller = TRUE,
-                     dom = 'lBfrtip',
-                     fixedColumns = TRUE, 
-                     searching = FALSE), 
-      rownames = FALSE) 
-
+print(dfSummary(df_50000, text.graph.col = FALSE, graph.col = FALSE, style = "grid", valid.col = FALSE), headings = FALSE, max.tbl.height = 300, footnote = NA, col.width=50, method="render")
 ```
 
-### 1.2 Column change, New columns
+### 1.2 Column change
 
+To make the dataset easy to work with when building models or conducting EDA, the series of steps were made starting with changing the name of the columns to lower case and substituting dot with underscore.
 
-Change column names to lower case, substitute " " with "_".
-```{rcol_name_function}
- 
-# This function changes the column names of a data frame to lower case and substitutes dots with underscores
-#
-# PARAMETERS:
-#   - df: The input data frame
-#     TYPE: data frame
-#
-# RETURNS:
-#   - The modified data frame with column names substituted
-#     TYPE: data frame
-#
-# EXCEPTIONS:
-#   - This function assumes that the input is a valid data frame and does not handle other types of inputs
+```{r col_name_function}
+# A function to change the column names in a data frame to lower case and substituting dot with underscore
 
 change_column_names <- function(df) {
-  # Get the current column names of the data frame
+  # Get the column names of the data frame
   
   colnames(df) <- colnames(df)  %>%
   str_to_lower()  %>%
   str_replace_all("\\.", "_")
   
-  # Return the modified data frame
+  # Return the updated data frame
   return(df)
 }
 ```
 
 ```{r col_name}
-# Change column names, lower case, substitute "." with "_"
+#Change column names, lower case, substitute dot with _
 df_1000 <- change_column_names(df_1000)
 df_50000 <- change_column_names(df_50000)
 ```
 
-Change columns Order Date and Ship Date to date format
+The `Order Date` or `Ship Date` may be important when building the model. These columns were transformed to the appropriate date format (yyyy/mm/dd).
 
 ```{r to_date_function}
 
-# This function transforms a character column from a dataset in the format "dd/mm/yyyy" to a date format
-#
-# PARAMETERS:
-#   - df: A data frame containing the dataset
-#     TYPE: data frame
-#
-# RETURNS:
-#   - The input data frame with the specified column transformed to a date format
-#     TYPE: data frame
-#
-# EXCEPTIONS:
-#   - This function assumes that the character column contains valid dates in the format "dd/mm/yyyy"
-#     It does not handle missing values or invalid date formats
-
+# A function to transform a character columns with date in the format "yyyy/mm/dd" to a date format
 
 	transform_date_columns <- function(df) {
-  # Get the column names of the dataframe
-  column_names <- colnames(df)
+  # Get the column names 
+  col_names <- colnames(df)
   
-  # Iterate over each column in the dataframe
-  for (column_name in column_names) {
-    # Check if the column is of character type
-    if (is.character(df[[column_name]])) {
+  # Go through each column in the dataframe
+  for (col_name in col_names) {
+    # Check if this is character column 
+    if (is.character(df[[col_name]])) {
       # Check if the column values are in the format dd/mm/yyyy
-      if (any(grepl("^\\d{2}/\\d{2}/\\d{4}$", df[[column_name]]))) {
+      if (any(grepl("^\\d{2}/\\d{2}/\\d{4}$", df[[col_name]]))) {
         # Transform the column values to the date format, %Y to show years 2000–2068 properly
-        df[[column_name]] <- as.Date(df[[column_name]], format="%m/%d/%Y")
+        df[[col_name]] <- as.Date(df[[col_name]], format="%m/%d/%Y")
       }
     }
   }
   
-  # Return the transformed dataframe
+  # Return the updated dataframe
   return(df)
-}
+	}
+
 ```
 
 ```{r to_date}
-# Transform the character column to a date format
+# Transform the character columns with dates to a date format
 df_1000 <- transform_date_columns(df_1000)
 df_50000 <- transform_date_columns(df_50000)
 ```
 
-New columns factor Quarter, dummy Weekend, dummy for sales channel
+The `Country` column  was removed as it could be presented by `Region`. The `Order ID` column was removed as well as it was a unique number for a sale and it wasn't needed for the models.
 
+```{r del_country_id}
+# Delete columns country and order_id
+df_1000 <- df_1000 %>%
+          dplyr::select(-c(country, order_id))
+
+df_50000 <- df_50000 %>%
+          dplyr::select(-c(country, order_id))
+```
+
+### 1.3 New columns
+
+New factor column: 
+
+-    `critical_priority`: Target variable from `Order Priority`. If the order priority was critical , the value was 1, 0 for the rest.
+
+New numeric columns:
+
+-     `ship_time`: The shipping duration. The difference between `Ship Date` and `Order Date`. It could be connected to the order priority.
+-     `year`: Extracted year from the `Orer Date`. It could affect the order priority.
+-     ` month` Extracted month from the `Orer Date`. It could be affect the order priority.
+
+Columns `Order Date`, `Ship Date`, `Order Priority` were removed as now we have dummy variables that are easy to work with instead.
+
+Some other columns were also created as a try-out. For example, binary `is_weekend`, the value if the variable was 1 if the day of the order was weekend,0 otherwise. Or the column `quarter` to determine in which quarter of the year the order was placed. The new columns didn't change the performance of the model and were removed to avoid overfitting the models.
 ```{r col_quarter_function}
-#   This function adds a new column called "quarter" to a data frame based on the values in a date column
-#   The "quarter" column represents the quarter of the year corresponding to each date
-#
-# PARAMETERS:
-#   - df: The input data frame
-#     TYPE: data frame
-#
-#   - date_column: The name of the date column in the input data frame
-#     TYPE: date
-#
-# RETURNS:
-#   - The input data frame with an additional "quarter" column
-#     TYPE: data frame
-#
-# EXCEPTIONS:
-#   - This function assumes that the input data frame contains a valid date column
-#   - If the date column is not found in the input data frame, an error will be thrown
-#
+#   A function to add a new column "quarter" based on a date column
+#   The quarter of the year corresponding to each date
 
-	add_quarter_column <- function(df, date_column) {
-  # Check if the date column exists in the input data frame
-  if (!(date_column %in% colnames(df))) {
-    stop("Date column not found in the input data frame.")
-  }
+#	add_quarter_column <- function(df, date_col) {
+  # Check if the date column is in the data frame
+	  
+  #if (!(date_col %in% colnames(df))) {
+   # stop("No such date column.")
+ # }
   
   # Extract the quarter from the date column using lubridate::quarter function
-  df$quarter <- factor(quarter(df[[date_column]]))
+  #df$quarter <- factor(quarter(df[[date_col]]))
   
-  # Return the modified data frame with the additional "quarter" column
-  return(df)
-}
+  # Return the updated data frame with the new "quarter" column
+  #return(df)
+#}
 ```
 
 ```{r col_weekend_function}
-#   This function takes a dataframe as input and adds a new column indicating whether the day of the order date
-#   is a weekend or not. If the day is a weekend, the value in the new column will be 1, otherwise it will be 0
-#
-# PARAMETERS:
-#   - df: The input dataframe containing the order date column
-#     TYPE: dataframe
-#
-#   - date_col: The name of the column in the dataframe that contains the order dates
-#     TYPE: date
-#
-# RETURNS:
-#   - The input dataframe with an additional column indicating whether the day is a weekend or not
-#     TYPE: dataframe
-#
-# EXCEPTIONS:
-#   - This function assumes that the order date column is in the correct format (YYYY-MM-DD) and does not handle
-#     invalid date formats.
-#   - This function assumes that the order date column contains valid dates and does not handle missing or null values
+#   A function to add a dummy variable indicating if the day of the order date
+#   was a weekend (the value 1) or not (the value 0)
 
- 
-add_weekend_indicator <- function(df, date_col) {
+#add_weekend_indicator <- function(df, date_col) {
+   # Check if the specified column exists
+#    if (!(date_col %in% colnames(df))) {
+#    stop("No such date column.")
+ # }
 
-  # Create a new column to store the weekend indicator
-  df$is_weekend <- factor(ifelse(weekdays(df[[date_col]]) %in% c("Saturday", "Sunday"), 1, 0))
+  # Add a new dummy variable 'is_weekend'
+#  df$is_weekend <- factor(ifelse(weekdays(df[[date_col]]) %in% c("Saturday", "Sunday"), 1, 0))
   
-  # Return the modified dataframe
-  return(df)
-}
+  # Return the updated dataframe
+#  return(df)
+#}
 
 ```
 
 ```{r col_online_function}
-# This function creates a dummy variable based on the values of a specified column in a data frame
-# If the sales channel is a online, the value in the new column will be 1, otherwise it will be 0
-#
-# PARAMETERS:
-#   - data: The data frame containing the column to create the dummy variable from
-#     TYPE: data frame
-#
-#   - channel_column: The name of the column in the data frame to create the dummy variable from
-#     TYPE: character
-#
-# RETURNS:
-#   - The modified data frame with the dummy variable added as a new column
-#     TYPE: data frame
+# A function to add a dummy variable indicating if the sales channel was a online, the value in the new column 
+# would be 1, otherwise 0
 
-#
-# EXCEPTIONS:
-#   - This function assumes that the specified column exists in the data frame
-#   - This function assumes that the specified column contains values of either "Online" or "Offline"
 
-add_online_indicator <- function(df, channel_column) {
-  # Check if the specified column exists in the data frame
-  if (!(channel_column %in% colnames(df))) {
-    stop("Specified column does not exist in the data frame.")
-  }
+#add_online_indicator <- function(df, channel_column) {
+  # Check if the specified column exists 
+#  if (!(channel_column %in% colnames(df))) {
+#    stop("No such date column.")
+#  }
   
-  # Create the dummy variable 'is_online'
-  df$is_online <- factor(ifelse(df[[channel_column]] == "Online", 1, 0))
+  # Add a new dummy variable 'is_online'
+#  df$is_online <- factor(ifelse(df[[channel_column]] == "Online", 1, 0))
   
-  # Return the modified data frame
-  return(df)
-}
+  # Return the updated data frame
+#  return(df)
+#}
 ```
 
 
 ```{r new_columns}
-# Create new columns quarter, is_weekend, is_online
+# Create new column ship_time
+
+df_1000$ship_time <- as.numeric(difftime(df_1000$ship_date, df_1000$order_date, units = "days"))
+
+df_50000$ship_time <- as.numeric(difftime(df_50000$ship_date, df_50000$order_date, units = "days"))
+```
+
+```{r add_month_year}
+# Extract month and year from order date 
+df_1000$order_month <- month(df_1000$order_date)
+df_1000$order_year <- year(df_1000$order_date)
+
+df_50000$order_month <- month(df_50000$order_date)
+df_50000$order_year <- year(df_50000$order_date)
+```
+
+```{r add_critical_priority}
+# Create 'critical_priority' column based on 'Order Priority', remove date columns
+df_1000$critical_priority <- ifelse(df_1000$order_priority == "C", '1', '0')
+
+
 df_1000 <- df_1000 %>%
-          add_quarter_column("order_date") %>%
-          add_weekend_indicator("order_date") %>%
-          add_online_indicator("sales_channel")
+    dplyr::select(-c(order_priority, ship_date, order_date))
+
+df_50000$critical_priority <- ifelse(df_50000$order_priority == "C", '1', '0')
 
 df_50000 <- df_50000 %>%
-          add_quarter_column("order_date") %>%
-          add_weekend_indicator("order_date") %>%
-          add_online_indicator("sales_channel")
+    dplyr::select(-c(order_priority, ship_date, order_date))
 ```
 
 
+### 1.4 Change column type
 
-Character columns to factor 
+Character columns were transformed to factor to be used in the models (e.g. region, item type) as well as target variable (critical_priority).
 
 ```{r to_factor_function}
-# This function takes a data frame as input and transforms all character columns to factor columns
-#
-# PARAMETERS:
-#   - df: A data frame
-#     TYPE: data.frame
-#
-# RETURNS:
-#   - The transformed data frame with character columns converted to factor columns
-#     TYPE: data.frame
-#
-# EXCEPTIONS:
-#   - This function assumes that all character columns in the data frame can be safely converted to factors
-#   - If a column contains non-character values, an error may occur
+# A function to transform all character columns to factors
 
 transform_character_columns <- function(df) {
   # Identify the character columns in the data frame
@@ -383,7 +360,7 @@ transform_character_columns <- function(df) {
   # Transform the character columns to factor columns
   df[char_cols] <- lapply(df[char_cols], as.factor)
   
-  # Return the transformed data frame
+  # Return the updated data frame
   return(df)
 }
 ```
@@ -395,56 +372,1084 @@ df_50000 <- transform_character_columns(df_50000)
 ```
 
 
-Order ID to character
+## 2. Data Exploration
 
-```{r to_character_function}
-# This function takes a data frame as input and transforms a numeric column to a character column
-#
-# PARAMETERS:
-#   - df: A data frame
-#     TYPE: data.frame
-#
-# RETURNS:
-#   - The transformed data frame with a numeric column converted to a character column
-#     TYPE: data.frame
-#
-# EXCEPTIONS:
-#   - This function assumes that any numeric column in the data frame can be safely converted to characters
-#   - If a column contains non-numeric values, an error may occur
+The structure and columns of both datasets were the same. The resulting datasets contained 13 variables.
 
-transform_numeric_column <- function(df, num_column) {
+The data contained inherent dependencies. For example, `total_revenue` could be calculated by multiplying `units_sold` and `unit_price`. Or `total_profit` could be calculated by subtracting `total_cost` from `total_revenue`. 
+
+There was no specific label for supervised learning. However, we created a new variable from `order_priority` called `critical_priority` to predict if the order was of a critical priority based on other features. 
+
+The consistent structure facilitated a uniform analysis.
+
+```{r summary_small_update}
+print(dfSummary(df_1000, text.graph.col = FALSE, graph.col = FALSE, style = "grid", valid.col = FALSE), headings = FALSE, max.tbl.height = 300, footnote = NA, col.width=50, method="render")
+
+```
+
+```{r summary_large_update}
+print(dfSummary(df_50000, text.graph.col = FALSE, graph.col = FALSE, style = "grid", valid.col = FALSE), headings = FALSE, max.tbl.height = 300, footnote = NA, col.width=50, method="render")
+```
+
+### 2.1 Numeric varibles
+
+`Units Sold`: Uniform distribution, the majority of sales records appeared to be centered around the 5,000 level, although there was a broad range, with some records having extremely high or extremely low unit sales.
+
+`Unit Price`,`Unit Cost`: The distribution was multi-modal, showing that things were priced and cost differently.
+
+`Ship Time`: The majority of shipping dates appeared to be centered around the 25 days, although there was a broad range.
+
+`Total Revenue`: There was a right skew, suggesting that the majority of sales records generated revenue of less than $2.5 million, but there were a few records with significantly larger revenue.
+
+`Total Cost`: The distribution was right-skewed, as was Total Revenue.
+
+`Total Profit`: Right-skewed, the distribution shows that the majority of profit values were under $1 million, however there were records with significantly larger profit.
+
+The distribution of numeric values were similar for the small and large data.
+
+```{r density_plot_function}
+# A function to create histograms and density plots for numeric columns.
+# The column names were change, underscore was subsitute with spaces, the first letter of each word was capitalized for a better representation on the plots
+# Histograms and density plots are then created for each numeric variable and displayed using facet_wrap.
+# Add title for each data frame
+
+density_plot_function <-function(df, title) {
   
-  # Transform the numeric column to a character column
-  df[num_column] <- lapply(df[num_column], as.character)
-  
-  # Return the transformed data frame
-  return(df)
+  # Select numeric columns and rename them
+  m_df <- df %>% dplyr::select_if(is.numeric) %>% rename_all(~str_replace_all(., "_", " ") %>%
+                tools::toTitleCase()) %>% melt()
+
+   # Create histograms with the density ggplot
+  m_df %>% ggplot() + 
+  geom_histogram(aes(x=value, y = ..density..), alpha=0.7, fill="gray", colour='gray') +
+    geom_density(aes(x=value), color='purple', size=1) + facet_wrap(~variable, scales = 'free',  ncol = 3) + 
+    theme_minimal()+
+    labs(title=title, x = 'Variables', y = 'Values') 
 }
 ```
 
-```{r to_character}
-# Transform from numeric to character order_id column
-df_1000 <- transform_numeric_column(df_1000, "order_id")
-df_50000 <- transform_numeric_column(df_50000, "order_id")
+```{r density_plot}
+# Create density plots for numeric columns
+density_plot_function(df_1000, 'Distributions for 1000 Sales Records')
+density_plot_function(df_50000, 'Distributions for 50000 Sales Records')
 ```
 
-Summary for the updated data
 
+`Total Revenue` vs. `Units Sold`: There was a strong positive association between the number of units sold and the total revenue earned by those sales, showing that as the number of units sold increases, so did the overall revenue. This was understandable given that income is directly proportional to the number of units sold multiplied by the unit price.
 
-```{r summary}
-DT::datatable(
-      dfSummary(df_1000, text.graph.col = FALSE, graph.col = FALSE),
-      extensions = c('Scroller'),
-      options = list(scrollY = 350,
-                     scrollX = 500,
-                     deferRender = TRUE,
-                     scroller = TRUE,
-                     dom = 'lBfrtip',
-                     fixedColumns = TRUE, 
-                     searching = FALSE), 
-      rownames = FALSE) 
+`Total Revenue` vs. `Unit Price`: There was no obvious linear relationship between total income and item unit pricing. While higher unit prices could lead to higher revenues, the quantity sold also played a role. Some lower-priced items might have higher sales quantities, resulting in equivalent income.
+
+The scatter plots were similar for the small and large data.
+
+```{r scatter_plots_revenue_function}
+# A function to create scatter plots to visualize a grid:
+# Units Sold vs Total Revenue
+# Unit Price vs Total Revenue
+# Total Cost vs Total Profit
+# 
+
+plot_relationships <- function(df, title) {
+  # Plot for Units Sold vs Total Revenue
+  a1 <- ggplot(df, aes(x=units_sold, y=total_revenue)) +
+    geom_point(alpha=0.5, color="blue") +
+    labs(
+        x = "Unit Sold",
+        y = "Total Revenue") +
+    theme_minimal()
+  
+  # Plot for Unit Price vs Total Revenue
+  a2 <- ggplot(df, aes(x=unit_price, y=total_revenue)) +
+    geom_point(alpha=0.5, color="blue") +
+    labs(
+        x = "Unit Price",
+        y = "Total Revenue") +
+    theme_minimal()
+  
+  # Plot for Total Cost vs Total Profit
+  a3 <- ggplot(df, aes(x=total_cost, y=total_profit)) +
+    geom_point(alpha=0.5, color="blue") +
+    labs(
+        x = "Total Cost",
+        y = "Total Profit") +
+    theme_minimal()
+  
+  # Arrange the plots in a grid
+  grid.arrange(a1, a2, a3, ncol=3, top=title)
+}
+```
+
+```{r scatter_plots_revenue}
+# Scatter plots for numeric columns
+plot_relationships(df_1000, 'Relationships for 1000 Sales Records')
+plot_relationships(df_50000, 'Relationships for 50000 Sales Records')
+```
+
+`Total Profit` vs. `Units Sold`: The scatter plot demonstrated an expected positive linear relationship between the number of `Units Sold` and `Total Profit`.
+
+The `Order Priority` hue offered further information about how different order priority were spread among sales records. It was worth noting that higher order priorities didn't always equate to more units sold or bigger profitability.
+
+The scatter plots were similar for the small and large data.
+
+```{r scatter_plot_profit}
+# Scatter plot for Units Sold vs Total Profit colored by Order Priority
+ggplot(df_1000, aes(x=units_sold, y=total_profit, color=critical_priority)) +
+    geom_point() +
+    scale_color_viridis_d(option = "inferno") +       
+    labs(
+        x = "Units Sold",
+        y = "Total Profit", 
+        title = 'Units Sold vs Total Profit colored by Order Priority, 1000 sales') +
+    theme_minimal()
+
+ggplot(df_50000, aes(x=units_sold, y=total_profit, color=critical_priority)) +
+    geom_point() +
+    scale_color_viridis_d(option = "inferno") +       
+    labs(
+        x = "Units Sold",
+        y = "Total Profit", 
+        title = 'Units Sold vs Total Profit colored by Order Priority, 50000 sales') +
+    theme_minimal()
 
 ```
+
+
+
+
+### 2.3 Category variables
+
+
+`Order Priority Count`: On the graph with the distribution of records based on order priority, the majority of orders had not a critical priority.
+
+`Total Profit by Order Priority`: On the box plot with the distribution of `Total Profit` across different order priority, profits varied widely across priority, with the median profit appearing to be consistent.
+
+`Units Sold by Order Priority`: There was no apparent trend demonstrating that a specific order priority regularly generated greater or lower sales. Although all priorities had a wide range of sales, the median sales appeared to be larger for non-critical priority.
+
+The large data was more balanced in terms of dummy variables than small data.
+
+```{r priority_function}
+
+# A function to create 3 box plots that compare sales and order priority data:
+# The number of orders by order priority.
+# The total profit by order priority.
+# The units sold by order priority.
+
+priority_sales_function <- function(df, title) {
+
+# Bar plot for 'Order Priority'
+a2 <- ggplot(df, aes(x=critical_priority)) +
+    geom_bar(fill=viridis(1)) + 
+            labs(
+        x = "Order Priority",
+        y = "Count", 
+        title = "'Count by Order Priority") +
+    theme_minimal() + theme(legend.position = "none")
+
+
+# Box plot for 'Total Profit' by 'Order Priority'
+a4 <- ggplot(df, aes(x=critical_priority, y=total_profit, fill=critical_priority)) +
+    geom_boxplot() +
+    scale_fill_viridis_d() +
+    ggtitle('Total Profit by Order Priority') +
+              labs(
+        x = "Order Priority",
+        y = "Total Profit", 
+        title = "'Total Profit by Order Priority") +
+    theme_minimal() +  theme(legend.position = "none")
+
+
+a6 <- ggplot(df, aes(x=critical_priority, y=units_sold, fill=critical_priority)) +
+    geom_boxplot() +
+    scale_fill_viridis_d() +       
+        labs(
+        x = "Order Priority",
+        y = "Units Sold", 
+        title = "Units Sold by Order Priority") +
+    theme_minimal() +  theme(legend.position = "none")
+
+
+# Print the plots
+grid.arrange(a2, a4, ncol=2, top=title)
+grid.arrange(a6, ncol=1)
+}
+
+```
+
+```{r priority_sales_plot}
+# Box plots for sales channel, order priority
+priority_sales_function(df_1000, "Order Priority for 1000 sales")
+priority_sales_function(df_50000, "Order Priority for 50000 sales")
+```
+
+Critical priority sales were distributed similarly across both online and offline sales channels, with non-critical sales being more common.
+```{r}
+# Distribution of Critical Priority by Sales Channel
+ggplot(df_1000, aes(x = sales_channel, fill = critical_priority)) +
+  geom_bar(position = "dodge") +
+  labs(
+    x = 'Sales Channel', 
+    y = 'Count', 
+    title = 'Critical Priority by Sales Channel, 1000 Sales') +
+  theme_minimal() +  theme(legend.position = "none")
+
+ggplot(df_50000, aes(x = sales_channel, fill = critical_priority)) +
+  geom_bar(position = "dodge") +
+  labs(
+    x = 'Sales Channel', 
+    y = 'Count', 
+    title = 'Critical Priority by Sales Channel, 50000 Sales') +
+  theme_minimal() +  theme(legend.position = "none")
+```
+
+
+`Count vs Region`: The region of Sub-Saharan Africa had the most sales records, and within this region, the number of sales with a critical priority was substantially smaller than those without. Europe and Central Africa had a significantly larger number of critical priority sales.
+
+`Total Profit vs Region`: The median profit was reasonably consistent among regions, although each location had a large range of profits, as evidenced by the length of the boxes and whiskers.
+
+`Units Sold by Region`: The median number of units sold was rather consistent among regions as shown on the box plot, similar to the profit distribution, however there was diversity within each zone.
+
+All the plots for both data sets were almost the same except that median for units sold by region and total profit by region were more equal for a large data than for a small data.
+
+```{r byregion_function}
+# A function to create a set of three box plots that compare sales data by region:
+# The number of orders by region.
+# The total profit by region.
+# The units sold by region.
+
+byregion_function <- function(df, title) {
+  # Reordering the levels of 'Region' based on their counts
+  df$region <- factor(df$region, levels = names(sort(table(df$region), decreasing = TRUE)))
+
+# Bar plot for 'Region'
+a1 <- ggplot(df, aes(x = region, fill = critical_priority)) +
+  geom_bar(position = "dodge") + 
+      labs(
+        x = "Region",
+        y = "Count", 
+        title = "Critical Priority by Region") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "none")
+
+# Box plot for 'Total Profit' by 'Region'
+a2 <- ggplot(df, aes(x=region, y=total_profit, fill=region)) +
+    geom_boxplot() +
+    scale_fill_viridis_d() +
+      labs(
+        x = "Region",
+        y = "Total Profit", 
+        title = "Total Profit by Region") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "none")
+
+# Box plot for 'Units Sold' by 'Region'
+a3 <- ggplot(df, aes(x=region, y=units_sold, fill=region)) +
+    geom_boxplot() +
+    scale_fill_viridis_d() +
+        labs(
+        x = "Region",
+        y = "Units Sold", 
+        title = "Units Sold by Region") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "none")
+
+grid.arrange(a1, ncol=1, top=title)
+grid.arrange(a2, ncol=1)
+grid.arrange(a3, ncol=1)
+  
+}
+
+
+
+```
+
+```{r byregion}
+# Boxplots for Region disctribution
+byregion_function(df_1000, "Distribution by Region, 1000 Sales")
+byregion_function(df_50000, "Distribution by Region, 50000 Sales")
+```
+
+`Profitability by Item Type`: The distribution of `Total Profit` among different item types showed the variation in profit among item types. Some things, such as `Cosmetics` had larger median profits than others, such as `Vegetables`, which had lower median earnings.
+
+`Units Sold by Item Type`: The distribution of `Units Sold` across different item kinds depicted that the number of units sold varied depending on the product. For example, `Baby Food` had a greater median unit sale, whereas 'Cereal' had a lower median.
+
+`Count by Item Type`: Item types, cosmetics, household, and office supplies appear to have a higher number of critical priority sales. Fruits, vegetables, and snacks, on the other hand, have a smaller proportion of essential priority sales.
+
+
+
+```{r profit_units_type_function}
+# A function to create a set of two plots to compare the distribution of total profit and units sold by item type:
+# The total profit by item type.
+# Tthe units sold by item type.
+
+items_distribution <- function(df, title) {
+  # Reordering the levels of 'Item Type' based on their counts
+df$item_type <- factor(df$item_type, levels = names(sort(table(df$item_type), decreasing = TRUE)))
+
+# Box plot for 'Total Profit' by 'Item Type'
+a1 <- ggplot(df, aes(x=item_type, y=total_profit, fill=item_type)) +
+    geom_boxplot() +
+    scale_fill_viridis_d() +
+        labs(
+        x = "Item Type",
+        y = "Total Profit", 
+        title = "Total Profit by Item Type") +
+    theme_minimal()+
+    theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "none")
+
+# Box plot for 'Units Sold' by 'Item Type'
+a2 <- ggplot(df, aes(x=item_type, y=units_sold, fill=item_type)) +
+    geom_boxplot() +
+    scale_fill_viridis_d() +
+        labs(
+        x = "Item Type",
+        y = "Units Sold", 
+        title = "Units Sold by Item Type") +
+    theme_minimal()+
+    theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "none")
+
+# Distribution of Critical Priority by Item Type
+a3 <- ggplot(df, aes(x = item_type, fill = critical_priority)) +
+  geom_bar(position = "dodge") +
+  labs(
+    x ="'Item Type", 
+    y = "Count", 
+    title = 'Critical Priority by Item Type') +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+# Print the plots
+grid.arrange(a1, ncol=1, top=title)
+grid.arrange(a2, ncol=1)
+grid.arrange(a3, ncol=1)
+}
+```
+
+```{r profit_units_type}
+# Boxplots for item distribution
+items_distribution(df_1000, "Item Type disctribution for 1000 sales")
+items_distribution(df_50000, "Item Type disctribution for 50000 sales")
+```
+
+
+`Count vs. Order Year`: The data ranging from 2010 to 2017, with the quantity of sales records fluctuating from year to year.
+ 
+Next graph showed the monthly sales trend from 2010 to 2017. There appeared to be a repeating trend in sales, with some months typically seeing more sales than others. The magnitude of sales varies from year to year. Around most years, sales peak around the middle of the year, particularly around June and July.
+
+
+```{r }
+# Order Year count
+
+ggplot(df_50000, aes(x = as.factor(order_year))) +
+  geom_bar() + 
+  labs(title = 'Order Year Distribution, 50000 Sales', x = 'Order Year', y = 'Count') +
+  theme(text = element_text(size = 12),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(hjust = 0.5, size = 15)) +
+  theme_minimal() 
+
+# Aggregate data by order year and order month
+sales <- df_50000 %>%
+  group_by(order_year, order_month) %>%
+  summarise(sales = n()) %>%
+  ungroup()
+
+# Monthly Sales Trend
+ggplot(sales, aes(x = order_month, y = sales, group = order_year, color = as.factor(order_year))) +
+  geom_line(aes(linetype = as.factor(order_year))) +
+  geom_point(shape = 21, fill = "white") +
+  scale_x_continuous(breaks = 1:12, labels = c('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec')) +
+  labs(title = 'Monthly Sales Trend (2010-2017)', x = 'Month', y = 'Count') +
+  theme(text = element_text(size = 12),
+        plot.title = element_text(hjust = 0.5, size = 15),
+        legend.position = "top",
+        legend.title = element_text(size = 12)) +
+  guides(color = guide_legend(title = "Year"))
+
+
+
+```
+### 2.3 Correlation 
+
+The `Unit Price` and `Unit Cost` had a significant connection, which made logical given that cost and price were frequently associated.
+`Total Revenue`, `Total Cost` and `Total Profit` were likewise closely connected, which was to be expected given that they were generated from one another.
+`Units Sold` had a strong relationship with `Total Revenue`, `Total Cost`, and `Total Profit`. This made sense because the number of units sold had an immediate influence on revenue, cost, and profit.
+
+`Region` and `Country` were be entirely dependent on one another for an obvious reason. As well as `Order Date` and `Shipping Date` that were naturally  correlated, and additionally affected by the item type.
+
+The correlation matrix for 1000 sales.
+```{r corr_small}
+
+rcore <- rcorr(as.matrix(df_1000 %>% dplyr::select(where(is.numeric))))
+coeff <- rcore$r
+corrplot(coeff, tl.cex = .7, tl.col="black", method = 'color', addCoef.col = "black",
+         type="upper", order="hclust",
+         diag=FALSE)
+
+```
+
+The correlation matrix for 50000 sales.
+```{r corr_large}
+
+rcore <- rcorr(as.matrix(df_50000 %>% dplyr::select(where(is.numeric))))
+coeff <- rcore$r
+corrplot(coeff, tl.cex = .7, tl.col="black", method = 'color', addCoef.col = "black",
+         type="upper", order="hclust",
+         diag=FALSE)
+
+```
+
+
+
+
+## 3 Data Transformation
+
+Finally, we split our data into train (80%) and test (20%) datasets to evaluate model performance before we proceeded to prediction. The train data contained 800 sales, test data 200 sales for a small dataset.
+
+Slightly different variations were used depending on each model's needs.
+
+The preprocessing technique and sample.split() were used for the simple Logistic Regression and Random Forest models. The preprocessing consisted of encoding categorical variables (`region`, `item_type`, `sales_channel`).
+
+For the 1000 Sales Data, the response variable had a balance of 74% for `0` response and 26% for `1` response. This was the result of the distribution of the original column `Order Priority` where 4 values (C, H, M, L) had a part of ~26% each. It could happen that if we used undersampling or oversampling techniques for the target variable, the accuracy of our models could be 50%. For the further analysis, it could be an option to try balance the response variable.
+
+
+
+```{r split_regression}
+temp_1 <- df_1000
+
+
+# Creating recipe to encode all categorical variables except for a target variable
+preprocess_factors <- recipe(critical_priority ~ ., data = temp_1) %>%
+  step_dummy(all_nominal(), -all_outcomes(), one_hot = FALSE)
+
+# Fit the preprocessing technique 
+preprocess_factors_prep <- prep(preprocess_factors)
+
+
+# Encode factor variables
+temp_1_transformed <- bake(preprocess_factors_prep, new_data = temp_1)
+temp_1_transformed <- temp_1_transformed  %>%
+  mutate_at(vars(starts_with("item_type"), starts_with("region"), starts_with("sales_channel")), as.factor)
+
+# random seed
+set.seed(42)
+
+# 80/20 split of the data set
+sample <- sample.split(temp_1_transformed$critical_priority, SplitRatio = 0.8)
+train_data  <- subset(temp_1_transformed, sample == TRUE)
+test_data   <- subset(temp_1_transformed, sample == FALSE)
+
+# Check dimenstions of train and test data
+dim(train_data)
+dim(test_data)
+
+# Check class distribution of original, train, and test sets
+round(prop.table(table(dplyr::select(temp_1_transformed, critical_priority), exclude = NULL)), 4) * 100
+round(prop.table(table(dplyr::select(train_data, critical_priority), exclude = NULL)), 4) * 100
+round(prop.table(table(dplyr::select(test_data, critical_priority), exclude = NULL)), 4) * 100
+
+```
+
+
+
+The train data contained 4000 sales, test data 1000 sales for a large dataset. 
+
+The response variable had a balance of 75% for `0` response and 25% for `1` response. This was the result of the distribution of the original column `Order Priority` where 4 values (C, H, M, L) had a part of ~25% each. 
+
+```{r split_regression_large}
+temp_3 <- df_50000
+
+
+# Creating recipe to encode all categorical variables except for a target variable
+preprocess_factors <- recipe(critical_priority ~ ., data = temp_3) %>%
+  step_dummy(all_nominal(), -all_outcomes(), one_hot = FALSE)
+
+# Fit the preprocessing technique 
+preprocess_factors_prep <- prep(preprocess_factors)
+
+
+# Encode factor variables
+temp_3_transformed <- bake(preprocess_factors_prep, new_data = temp_3)
+temp_3_transformed <- temp_3_transformed  %>%
+  mutate_at(vars(starts_with("item_type"), starts_with("region"), starts_with("sales_channel")), as.factor)
+
+# random seed
+set.seed(42)
+
+# 80/20 split of the data set
+sample <- sample.split(temp_3_transformed$critical_priority, SplitRatio = 0.8)
+train_data_large  <- subset(temp_3_transformed, sample == TRUE)
+test_data_large   <- subset(temp_3_transformed, sample == FALSE)
+
+# Check dimenstions of train and test data
+dim(train_data_large)
+dim(test_data_large)
+
+# Check class distribution of original, train, and test sets
+round(prop.table(table(dplyr::select(temp_3_transformed, critical_priority), exclude = NULL)), 4) * 100
+round(prop.table(table(dplyr::select(train_data_large, critical_priority), exclude = NULL)), 4) * 100
+round(prop.table(table(dplyr::select(test_data_large, critical_priority), exclude = NULL)), 4) * 100
+
+```
+
+
+The train and test data frame are transformed into vectors and the corresponding matrix (X, Y) for the  k-fold cross-validation.
+
+```{r split_valid}
+temp_2 <- df_1000
+
+# random seed
+set.seed(42)
+
+# 80/20 split of the data set
+sample <- sample.split(temp_2$critical_priority, SplitRatio = 0.8)
+df_train  <- subset(temp_2, sample == TRUE)
+df_test   <- subset(temp_2, sample == FALSE)
+
+# Transform to vectors and the corresponding matrix
+x_train <- model.matrix(critical_priority ~ ., data=df_train)[,-1]
+y_train <- df_train[,"critical_priority"] 
+
+x_test <- model.matrix(critical_priority ~ ., data=df_test)[,-1]
+y_test <- df_test[,"critical_priority"] 
+```
+
+```{r split_valid_large}
+temp_4 <- df_50000
+
+# random seed
+set.seed(42)
+
+
+# 80/20 split of the data set
+sample <- sample.split(temp_4$critical_priority, SplitRatio = 0.8)
+df_train_large  <- subset(temp_4, sample == TRUE)
+df_test_large   <- subset(temp_4, sample == FALSE)
+
+# Transform to vectors and the corresponding matrix
+x_train_large <- model.matrix(critical_priority ~ ., data=df_train_large)[,-1]
+y_train_large <- df_train_large[,"critical_priority"] 
+
+x_test_large <- model.matrix(critical_priority ~ ., data=df_test_large)[,-1]
+y_test_large <- df_test_large[,"critical_priority"] 
+```
+
+
+
+## 4 Models
+
+### 4.1 Logistic regression - 1000 Sales
+
+As the first step, we built the generalized linear model based on the transformed training dataset with categorical variables transformed to dummy variables. The variables `total_profit`, `total_cost`, `total_revenue` were dropped as they are connected with each other and derived from `unis_sold` and `units_cost` variables. Since our dependent variable takes only two values (0 and 1), we used logistic regression. To do so, the function `glm()` with `family=binomial` was used. 
+
+```{r log_model}
+# Build logistic regression model
+log_model <- glm(critical_priority ~ . -total_profit - total_revenue - total_cost, data = train_data, binomial(link = "logit"), control = list(maxit = 1000))
+
+summ(log_model)
+```
+
+The summary table didn't show any significant variables. The p-value associated with this Chi-Square statistic was 0 which is less than .05, the model could be useful.
+
+The Akaike information criterion (`AIC`) was `926.46` which could be high, there was a need to compare with other models.
+
+The `accuracy` of the model was 71.5%. Based on the confusion matrix, the model didn't perform well in predicting critical priority as it was shown by the precision and recall values for class 1.
+
+The `null deviance` of `921.05` defined how well the target variable could be predicted by a model with only an intercept term.
+
+The `residual deviance` of `880.46` defined how well the target variable can be predicted by our current model that we fit with  predictor variables mentioned above. The lower the value, the better the model could predict the value of the response variable.
+
+```{r log_model_predict}
+
+# Predict using test data
+log_model_prob <- predict(log_model, newdata = test_data, type = "response")
+log_model_pred <- ifelse(log_model_prob  > 0.5, 1, 0) 
+
+# Evaluate the Logistic Regression model
+conf_matrix_1 <- confusionMatrix(factor(log_model_pred), factor(test_data$critical_priority), "1")
+
+
+results <- tibble(Model = "Model #1 - Log Regression 1000 Sales", Accuracy=conf_matrix_1$overall[1], 
+                  "Classification error rate" = 1 - conf_matrix_1$overall[1],
+                  F1 = conf_matrix_1$byClass[7],
+                  Deviance= log_model$deviance, 
+                  R2 = 1 - log_model$deviance / log_model$null.deviance,
+                  Sensitivity = conf_matrix_1$byClass["Sensitivity"],
+                  Specificity = conf_matrix_1$byClass["Specificity"],
+                  Precision = precision(factor(log_model_pred), factor(test_data$critical_priority), "1"),
+                  AIC= log_model$aic)
+
+conf_matrix_1
+
+```
+#### Assumptions
+
+The linear link between the independent variables and the logit transformation of the response variable was required by the Logistic regression model. 
+The visualization below showed no required linearity between independent variables and the log-odds of the target.
+
+
+```{r linearity_log}
+probabilities <- predict(log_model, type = "response")
+predicted.classes <- ifelse(probabilities > 0.5, "pos", "neg")
+head(predicted.classes)
+
+#Only numeric predictors
+data <- train_data %>%
+  dplyr::select_if(is.numeric) 
+predictors <- colnames(data)
+
+# Bind the logit and tidying the data for plot
+data <- data %>%
+  mutate(logit = log(probabilities/(1-probabilities))) %>%
+  gather(key = "predictors", value = "predictor.value", -logit)
+
+#Scatter plot
+ggplot(data, aes(logit, predictor.value))+
+  geom_point(size = 0.5, alpha = 0.5) +
+  geom_smooth(method = "loess") + 
+  theme_bw() + 
+  facet_wrap(~predictors, scales = "free_y")
+```
+
+
+Also, observations had to be independent of each other. As this is a randomly created dataset, we could assume that each sale record was independent.
+
+There had to be no multicollinearity. The correlation matrix below didn't show extremely high multicollinearity. However, variables `total_revenue`, `total_cost`, `total_profit` were related and could be a multicollinearity issue, they were not used in the logistic regression model.
+
+
+```{r corr_log}
+
+rcore <- rcorr(as.matrix(train_data %>% dplyr::select(where(is.numeric))))
+coeff <- rcore$r
+corrplot(coeff, tl.cex = .7, tl.col="black", method = 'color', addCoef.col = "black",
+         type="upper", order="hclust",
+         diag=FALSE)
+
+```
+
+
+
+### 4.2 Logistic regression - 50000 Sales
+
+The generalized linear model was built based on the transformed training dataset with categorical variables transformed to dummy variables. The variables `total_profit`, `total_cost`, `total_revenue` were dropped as they are connected with each other and derived from `unis_sold` and `units_cost` variables. Since our dependent variable takes only two values (0 and 1), we used logistic regression. To do so, the function `glm()` with `family=binomial` was used. 
+
+```{r log_model_large}
+# Build logistic regression model
+log_model_large <- glm(critical_priority ~ . -total_profit - total_revenue - total_cost, data = train_data_large, binomial(link = "logit"), control = list(maxit = 1000))
+
+summ(log_model_large)
+```
+
+The summary table didn't show any significant variables. The p-value associated with this Chi-Square statistic was 0 which is less than .05, the model could be useful.
+
+The Akaike information criterion (`AIC`) was `44925.52` which could be high, there was a need to compare with other models.
+
+The `accuracy` of the model was 75.1%, higher than for the 1000 sales. Similar to the previous model, the model didn't perform well in predicting critical priority as it was shown by the precision and recall values for class 1.
+
+The `null deviance` of `44892.08` defined how well the target variable could be predicted by a model with only an intercept term.
+
+The `residual deviance` of ` 44879.52` showed that our model couldn't predict well the response variable.
+
+```{r log_model_predict_large}
+
+# Predict using test data
+log_model_prob_large <- predict(log_model_large, newdata = test_data_large, type = "response")
+log_model_pred_large <- ifelse(log_model_prob_large  > 0.5, 1, 0) 
+
+# Evaluate the Logistic Regression model
+conf_matrix_2 <- confusionMatrix(factor(log_model_pred_large), factor(test_data_large$critical_priority), "1")
+
+
+results <- rbind(results, tibble(Model = "Model #2 - Log Regression 50000 Sales", Accuracy=conf_matrix_2$overall[1], 
+                  "Classification error rate" = 1 - conf_matrix_2$overall[1],
+                  F1 = conf_matrix_2$byClass[7],
+                  Deviance= log_model_large$deviance, 
+                  R2 = 1 - log_model_large$deviance / log_model_large$null.deviance,
+                  Sensitivity = conf_matrix_2$byClass["Sensitivity"],
+                  Specificity = conf_matrix_2$byClass["Specificity"],
+                  Precision = precision(factor(log_model_pred), factor(test_data$critical_priority), "1"),
+                  AIC= log_model_large$aic))
+
+conf_matrix_2
+
+```
+
+
+#### Assumptions
+
+The linear link between the independent variables and the logit transformation of the response variable was required by the Logistic regression model. 
+The visualization below showed no required linearity between independent variables and the log-odds of the target.
+
+The code below took too much time to run, the eval was set to FALSE to be able to post the report.
+```{r linearity_log_large, eval=FALSE}
+probabilities <- predict(log_model_large, type = "response")
+predicted.classes <- ifelse(probabilities > 0.5, "pos", "neg")
+head(predicted.classes)
+
+#Only numeric predictors
+data <- train_data_large %>%
+  dplyr::select_if(is.numeric) 
+predictors <- colnames(data)
+
+# Bind the logit and tidying the data for plot
+data <- data %>%
+  mutate(logit = log(probabilities/(1-probabilities))) %>%
+  gather(key = "predictors", value = "predictor.value", -logit)
+
+#Scatter plot
+ggplot(data, aes(logit, predictor.value))+
+  geom_point(size = 0.5, alpha = 0.5) +
+  geom_smooth(method = "loess") + 
+  theme_bw() + 
+  facet_wrap(~predictors, scales = "free_y")
+```
+
+
+Also, observations had to be independent of each other. As this is a randomly created dataset, we could assume that each sale record was independent.
+
+There had to be no multicollinearity. The correlation matrix below didn't show extremely high multicollinearity. However, variables `total_revenue`, `total_cost`, `total_profit` were related and could be a multicollinearity issue, they were not used in the logistic regression model.
+The correlation between variables looked less than in the small data.
+
+
+```{r corr_log_large}
+
+rcore <- rcorr(as.matrix(train_data_large %>% dplyr::select(where(is.numeric))))
+coeff <- rcore$r
+corrplot(coeff, tl.cex = .7, tl.col="black", method = 'color', addCoef.col = "black",
+         type="upper", order="hclust",
+         diag=FALSE)
+
+```
+
+### 4.2 Cross-validation - 1000 Sales
+The the k-fold cross-validation with Lasso regularization was used in order to improve feature selection for the Logistic regression model.
+
+```{r lasso__model}
+
+# Train Lasso rmodel
+set.seed(42)
+lasso_model<- cv.glmnet(x_train, 
+                       y_train,
+                       alpha = 1, #alpha=1 is lasso
+                       family = "binomial",
+                       link = "logit",
+                       nfolds = 5, 
+                       type.measure = "class")
+
+
+```
+
+The `accuracy` of the Lasso model is 74% instead of the previous 71.5% in the Logistic model for 1000 sales. The AUC score of 0.5 didn't suggest discriminative power. Based on the confusion matrix, the model didn't perform well in predicting critical priority as it was shown by the precision and recall values for class 1.
+
+The Lasso regularization showed that none of the independent variables were significant for the classification. This could happen due the nature of the synthetic data or the imbalance in the target variable.
+
+The Akaike information criterion (`AIC`) was extremely negative.
+
+```{r}
+glmnet_cv_aicc <- function(fit, lambda = 'lambda.min'){
+  whlm <- which(fit$lambda == fit[[lambda]])
+  with(fit$glmnet.fit,
+       {
+         tLL <- nulldev - nulldev * (1 - dev.ratio)[whlm]
+         k <- df[whlm]
+         n <- nobs
+         return(list('AICc' = - tLL + 2 * k + 2 * k * (k + 1) / (n - k - 1),
+                     'BIC' = log(n) * k - tLL))
+       })
+}
+```
+
+```{r lasso_pred}
+# Predict the test data
+lasso_prob <- predict(lasso_model, s = lasso_model$lambda.min, newx = x_test, type = "response")
+lasso_pred <- ifelse(lasso_prob > 0.5, 1, 0) 
+
+
+# The features selected by Lasso
+features_matrix <- as.matrix(coef(lasso_model, s = lasso_model$lambda.min))
+selected_features <- rownames(features_matrix)[features_matrix != 0]
+
+selected_features
+
+# Confusion matrix
+conf_matrix_3 = confusionMatrix(factor(lasso_pred),factor(y_test), "1")
+
+
+lasso.r1 <- assess.glmnet(lasso_model,           
+                                newx = x_test,              
+                                newy = y_test )   
+lasso.r2 <- glmnet_cv_aicc(lasso_model, 'lambda.min')
+
+lasso.r1$auc[1]
+
+conf_matrix_3
+
+results <- rbind(results,tibble(Model = "Model #3 - Lasso Model 1000 Sales", Accuracy=conf_matrix_3$overall[1], 
+                  "Classification error rate" = 1 - lasso.r1$auc[1],
+                  F1 = conf_matrix_3$byClass[7],
+                  Deviance=lasso.r1$deviance[[1]], 
+                  R2 = NA,
+                  Sensitivity = conf_matrix_3$byClass["Sensitivity"],
+                  Specificity = conf_matrix_3$byClass["Specificity"],
+                  Precision =  conf_matrix_3$byClass["Precision"],
+                  AIC= lasso.r2$AICc))
+```
+
+#### Assumptions
+
+
+The observations had to be independent of each other. As this is a randomly created dataset, we could assume that each sale record was independent
+
+Each fold in the k-fold cross-validation had to have approximately the same proportion of samples of each target class (stratified sampling).
+
+
+### 4.3 Cross-validation - 50000 Sales
+
+The steps to build the k-fold cross-validation with Lasso regularization were repeated for 50000 sales.
+
+```{r lasso__model_large}
+
+# Train Lasso rmodel
+set.seed(42)
+lasso_model_large <- cv.glmnet(x_train_large, 
+                       y_train_large,
+                       alpha = 1, #alpha=1 is lasso
+                       family = "binomial",
+                       link = "logit",
+                       nfolds = 5, 
+                       type.measure = "class")
+
+
+```
+
+The `accuracy` of the Lasso model is 75%, the same as in the model without cross-validation. The AUC score of 0.5 didn't suggest discriminative power. Based on the confusion matrix, the model didn't perform well in predicting critical priority as it was shown by the precision and recall values for class 1, the same as for all the previous regression models.
+
+The Lasso regularization showed that none of the independent variables were significant for the classification. This could happen due the nature of the synthetic data or the imbalance in the target variable.
+
+The Akaike information criterion (`AIC`) was extremely negative.
+
+```{r lasso_pred_large}
+# Predict the test data
+lasso_prob_large <- predict(lasso_model_large, s = lasso_model_large$lambda.min, newx = x_test_large, type = "response")
+lasso_pred_large <- ifelse(lasso_prob_large > 0.5, 1, 0) 
+
+
+# The features selected by Lasso
+features_matrix <- as.matrix(coef(lasso_model_large, s = lasso_model_large$lambda.min))
+selected_features <- rownames(features_matrix)[features_matrix != 0]
+
+selected_features
+
+# Confusion matrix
+conf_matrix_4 = confusionMatrix(factor(lasso_pred_large),factor(y_test_large), "1")
+
+
+lasso.r1 <- assess.glmnet(lasso_model_large,           
+                                newx = x_test_large,              
+                                newy = y_test_large)   
+lasso.r2 <- glmnet_cv_aicc(lasso_model_large, 'lambda.min')
+
+lasso.r1$auc[1]
+
+conf_matrix_4
+
+results <- rbind(results,tibble(Model = "Model #4- Lasso Model 50000 Sales", Accuracy=conf_matrix_4$overall[1], 
+                  "Classification error rate" = 1 - lasso.r1$auc[1],
+                  F1 = conf_matrix_4$byClass[7],
+                  Deviance=lasso.r1$deviance[[1]], 
+                  R2 = NA,
+                  Sensitivity = conf_matrix_4$byClass["Sensitivity"],
+                  Specificity = conf_matrix_4$byClass["Specificity"],
+                  Precision =  conf_matrix_4$byClass["Precision"],
+                  AIC= lasso.r2$AICc))
+```
+
+### Assumptions
+
+
+The observations had to be independent of each other. As this is a randomly created dataset, we could assume that each sale record was independent
+
+Each fold in the k-fold cross-validation had to have approximately the same proportion of samples of each target class (stratified sampling).
+
+### 4.5 Random Forest - 1000 Sales
+
+Next, we tried  Random Forest Regression model for the small dataset. The variables `total_profit`, `total_cost`, `total_revenue` were dropped as they are connected with each other and derived from `unis_sold` and `units_cost` variables.
+
+```{r rf_model}
+# Build a Random Forest model
+rf_model <- randomForest(critical_priority ~ . -total_profit - total_revenue - total_cost, data = train_data, ntree = 100, importance = TRUE)
+print(rf_model)
+```
+
+
+The `accuracy` of the model was 71%. Comparing to th previous models, the Random forest model better predicted critical priority as it was shown by the precision and recall values for class 1.
+
+
+```{r rd_pred}
+# Predict test data
+rf_model_pred <- predict(rf_model, newdata = test_data)
+
+# Evaluate the model
+
+conf_matrix_5 <- confusionMatrix(factor(rf_model_pred ), factor(test_data$critical_priority), "1")
+
+
+results <- rbind(results, tibble(Model = "Model #5 - Random Forest 1000 Sales", Accuracy=conf_matrix_5$overall[1], 
+                  "Classification error rate" = 1 - conf_matrix_3$overall[1],
+                  F1 = conf_matrix_5$byClass[7],
+                  Deviance= NA, 
+                  R2 = NA,
+                  Sensitivity = conf_matrix_5$byClass["Sensitivity"],
+                  Specificity = conf_matrix_5$byClass["Specificity"],
+                  Precision = precision(factor(rf_model_pred), factor(test_data$critical_priority), "1"),
+                  AIC= NA))
+
+conf_matrix_5
+
+```
+
+The plot below showed the feature importance., the Mean Decrease Accuracy showed how much the model accuracy decreased when we dropped that variable. Higher the value of mean decrease accuracy or mean decrease gini score, higher the importance of the variable in the model. Units sold was the most important variable.
+```{r}
+plot(rf_model)
+varImpPlot(rf_model) 
+```
+
+
+#### Assumptions
+
+Although Random Forest Regression didn't have strict assumptions like linear models, there were several things to consider when building the model.
+
+For example, there was no need for a data transformations or the need to follow a specific distribution as non-linear interactions can be captured without any explicit transformation. 
+
+
+The plot below depicted a single forest decision tree. Each node reflects a decision depending on the value of a feature. The decision seeks to separate the data in such a way that the purity of the resulting child nodes is increased. Because the tree makes binary choices, there are always two branches.
+The anticipated class is shown by the color of the leaf nodes, with darker colors signifying better predictions.
+
+```{r}
+
+
+# Build a single tree 
+single_tree <- rpart(critical_priority ~ ., data = train_data, method = "class", control = rpart.control(cp = 0.01))
+
+# Plot the tree
+rpart.plot(single_tree)
+
+
+```
+
+
+### 4.6 Random Forest - 50000 Sales
+
+As the last model, Random Forest Regression model for the large dataset. The variables `total_profit`, `total_cost`, `total_revenue` were dropped again.
+
+Building the model for the larger dataset took significantly more time compared to the smaller dataset
+
+```{r rf_model_large}
+# Build a Random Forest model
+rf_model_large <- randomForest(critical_priority ~ . -total_profit - total_revenue - total_cost, data = train_data_large, ntree = 100, importance = TRUE, seed = 42)
+print(rf_model_large)
+```
+
+
+The `accuracy` of the model was 75%, the same as the previous models for 50000 sales. 
+
+```{r rd_pred_large}
+# Predict test data
+rf_model_pred_large <- predict(rf_model_large, newdata = test_data_large)
+
+# Evaluate the model
+
+conf_matrix_6 <- confusionMatrix(factor(rf_model_pred_large), factor(test_data_large$critical_priority), "1")
+
+
+results <- rbind(results, tibble(Model = "Model #6 - Random Forest 50000 Sales", Accuracy=conf_matrix_6$overall[1], 
+                  "Classification error rate" = 1 - conf_matrix_6$overall[1],
+                  F1 = conf_matrix_6$byClass[7],
+                  Deviance= NA, 
+                  R2 = NA,
+                  Sensitivity = conf_matrix_6$byClass["Sensitivity"],
+                  Specificity = conf_matrix_6$byClass["Specificity"],
+                  Precision =NA,
+                  AIC= NA))
+
+conf_matrix_6
+
+```
+
+The plot below showed the feature importance., the Mean Decrease Accuracy showed how much the model accuracy decreased when we dropped that variable. Higher the value of mean decrease accuracy or mean decrease gini score, higher the importance of the variable in the model. Units sold was the most important variable.
+
+```{r }
+plot(rf_model_large)
+varImpPlot(rf_model_large) 
+```
+
+
+#### Assumptions
+
+Although Random Forest Regression didn't have strict assumptions like linear models, there were several things to consider when building the model.
+
+For example, there was no need for a data transformations or the need to follow a specific distribution as non-linear interactions can be captured without any explicit transformation. 
+
+
+The plot below depicted a single forest decision tree. Each node reflects a decision depending on the value of a feature. The decision seeks to separate the data in such a way that the purity of the resulting child nodes is increased. Because the tree makes binary choices, there are always two branches.
+The anticipated class is shown by the color of the leaf nodes, with darker colors signifying better predictions.
+
+```{r }
+
+# Build a single tree
+single_tree <- rpart(critical_priority ~ ., data = train_data_large, method = "class", control = rpart.control(cp = 0.01))
+
+# Plot the tree
+rpart.plot(single_tree)
+
+
+```
+
+
+
+### 5. Model selection
+
+The accuracy of both Logistic Regression and Random Forest models were marginally greater for the "50000 Sales Records" dataset than for the "1000 Sales Records" dataset. For both datasets, the performance of Logistic Regression was consistently dismal in terms of critical priorities Precision and Recall for class 1.
+
+The model trained on the "1000 Sales Records" dataset had a greater recall for essential priorities than the model trained on the "50000 Sales Records" dataset for Random Forest. 
+
+Both algorithms struggled to reliably identify essential priorities. This could be due to the imbalance in the classes, the necessity for more complex modeling methodologies (tuning hyperparameters, feature engineering, or using other modeling techniques) and the synthetic nature of the data.
+
+Anyway, the Random Forest Regression looked as a better choice, it could predict some of the class 1 values. There were no requirement for preprocessing tasks such as scaling and normalization of each feature.
+
+
+```{r}
+nice_table <- function(df, cap=NULL, cols=NULL, dig=3, fw=F){
+  if (is.null(cols)) {c <- colnames(df)} else {c <- cols}
+  table <- df %>% 
+    kable(caption=cap, col.names=c, digits=dig) %>% 
+    kable_styling(
+      bootstrap_options = c("striped", "hover", "condensed"),
+      html_font = 'monospace',
+      full_width = fw)
+  return(table)
+}
+
+results %>% 
+  nice_table(cap='Logistic Model Comparison') %>% 
+  scroll_box(width='100%')
+```
+
+
+### 6. Conclusion
+
+The provided datasets were generated using random logic and were not genuine sales data. Since the data was randomly generated, the patterns, connections, and distributions within the data were not indicative of real-world sales circumstances. As a result, any patterns or associations found by the models could be artifacts of the random data generating process rather than real-world occurrences. Both our Logistic Regression and Random Forest models struggled to identify significant priorities in both datasets. This difficulty was caused by the data's inherent randomness, which lacks any underlying patterns that a model could leverage. Models trained on this data should not be used in real-world circumstances. The provided data was not adequate for true predictive modeling applications. Though the above work could be used for the preprocessing sales data as it wouldn't lead to the costly mistakes on real data.
+
+As a result, the randomly generated data might be valuable for practice and testing, it is critical to understand its limitations when evaluating results or contemplating its use.
+
+
+### References
+
+1. Verma, V. A. (2021). Downloads 18 – Sample CSV Files / Data Sets for Testing (till 5 Million Records) – Sales. Excel BI Analytics. https://excelbianalytics.com/wp/downloads-18-sample-csv-files-data-sets-for-testing-sales/
+
+2. Nwanganga, F., & Chapple, M. (2020). Practical Machine Learning in R. https://doi.org/10.1002/9781119591542
+----------------
+
+
 
 
 
