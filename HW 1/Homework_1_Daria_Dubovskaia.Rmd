@@ -898,7 +898,7 @@ round(prop.table(table(dplyr::select(test_data_large, critical_priority), exclud
 ```
 
 
-The train and test data frame are transformed into vectors and the corresponding matrix (X, Y) for the  k-fold cross-validation.
+The train and test data frame were transformed into vectors and the corresponding matrix (X, Y) for the  k-fold cross-validation.The SMOTE() function was applied to the data in order to achieve higher accuracy rates between classes.
 
 ```{r split_valid}
 temp_2 <- df_1000
@@ -939,10 +939,10 @@ df_train_large  <- subset(temp_4, sample == TRUE)
 df_test_large   <- subset(temp_4, sample == FALSE)
 
 # Fix imbalance
-split_df_large <- as.data.frame(df_train_large )
-split_df_large $critical_priority <- as.factor(split_df_large $critical_priority)
-split_df_large  <- SMOTE(critical_priority ~ ., split_df_large , perc.over = 100, perc.under=200)
-split_df_large $critical_priority <- as.factor(split_df_large $critical_priority)
+split_df_large <- as.data.frame(df_train_large)
+split_df_large$critical_priority <- as.factor(split_df_large$critical_priority)
+split_df_large  <- SMOTE(critical_priority ~ ., split_df_large, perc.over = 100, perc.under=200)
+split_df_large$critical_priority <- as.factor(split_df_large$critical_priority)
 
 
 # Transform to vectors and the corresponding matrix
@@ -953,8 +953,10 @@ x_test_large <- model.matrix(critical_priority ~ ., data=df_test_large)[,-1]
 y_test_large <- df_test_large[,"critical_priority"] 
 ```
 
-For the Random Forest Model, the datasets without transformations were used.
+For the Random Forest Model, the datasets without transformations were used. The SMOTE() function was applied to the data in order to achieve higher accuracy rates between classes.
 ```{r split_forest_small}
+
+set.seed(42)
 
 splitIndex <- sample.split(df_1000$critical_priority, SplitRatio = 0.8)
 train_data_rf <-subset(df_1000, splitIndex == TRUE)
@@ -962,15 +964,17 @@ test_data_rf <- subset(df_1000, splitIndex == FALSE)
 
 # Fix imbalance
 split_rf <- as.data.frame(train_data_rf)
-split_rf $critical_priority <- as.factor(split_rf$critical_priority)
+split_rf$critical_priority <- as.factor(split_rf$critical_priority)
 split_rf <- SMOTE(critical_priority ~ ., split_rf, perc.over = 100, perc.under=200)
-split_rf $critical_priority <- as.factor(split_rf$critical_priority)
+split_rf$critical_priority <- as.factor(split_rf$critical_priority)
 
 
 
 ```
 
 ```{r split_forest_large}
+
+set.seed(42)
 
 splitIndex <- sample.split(df_50000$critical_priority, SplitRatio = 0.8)
 train_data_large_rf <-subset(df_50000, splitIndex == TRUE)
@@ -992,28 +996,29 @@ split_rf_large$critical_priority <- as.factor(split_rf_large$critical_priority)
 
 ### 4.1 Logistic regression - 1000 Sales
 
-As the first step, we built the generalized linear model based on the transformed training dataset with categorical variables transformed to dummy variables. The variables `total_profit`, `total_cost`, `total_revenue` were dropped as they are connected with each other and derived from `unis_sold` and `units_cost` variables. Variables `item_type_Vegetables`, `item_type_Snacks`, as the model ran error when predicting the probabilities, the rank of the data matrix was at least equal to the number of parameters, it was not. Since our dependent variable takes only two values (0 and 1), we used logistic regression. To do so, the function `glm()` with `family=binomial` was used. 
+As the first step, we built the generalized linear model based on the transformed training dataset with categorical variables transformed to dummy variables. The variables `total_profit`, `total_cost`, `total_revenue` were dropped as they are connected with each other and derived from `unis_sold` and `units_cost` variables. Variables `item_type_Vegetables`, `item_type_Snacks` were removed as the model ran error when predicting the probabilities, the rank of the data matrix was at least equal to the number of parameters, it was not. Since our dependent variable takes only two values (0 and 1), we used logistic regression. To do so, the function `glm()` with `family=binomial` was used. 
 A positive coefficient meant that as the predictor variable grew, so did the log odds of the outcome occurring, increasing the likelihood of the outcome.
 A negative coefficient implied the inverse.
 
 ```{r log_model}
+set.seed(42)
 # Build logistic regression model
 log_model <- glm(critical_priority ~ . -total_profit - total_revenue - total_cost - item_type_Vegetables - item_type_Snacks, data = train_data, binomial(link = "logit"), control = list(maxit = 1000))
 
 summ(log_model)
 ```
 
-The summary table didn't show any significant variables. The p-value associated with this Chi-Square statistic was 0 which is less than .05, the model could be useful.
+The summary table didn't show any significant variables. 
 
 The Akaike information criterion (`AIC`) was `926.46` which could be high, there was a need to compare with other models.
 
-The `accuracy` of the model was 71.5%. Based on the confusion matrix, the model didn't perform well in predicting critical priority as it was shown by the precision and recall values for class 1.
+The `accuracy` of the model was 71.5%. Based on the confusion matrix, the model didn't perform well in predicting critical priority as it was shown by the precision and recall values for class 1 (`Sensitivity` was 5.8%). `F1 score` of `0.095` combined the precision and recall scores of a model (our model was 9.5% accurate in predicting positive cases and 90.5% inaccurate in predicting negative cases).
 
 The `null deviance` of `921.05` defined how well the target variable could be predicted by a model with only an intercept term.
 
 The `residual deviance` of `880.46` defined how well the target variable can be predicted by our current model that we fit with  predictor variables mentioned above. The lower the value, the better the model could predict the value of the response variable.
 
-`AUC for the ROC curve` is `0.52`.
+`AUC for the ROC curve` was `0.52` (the ability of a binary classifier to distinguish between classes), it ranked a random positive example higher than a random negative example 52% of the time.
 
 ```{r log_model_predict, warning=FALSE, message=FALSE}
 
@@ -1034,7 +1039,7 @@ results <- tibble(Model = "Model #1 - Log Regression 1000 Sales", Accuracy=conf_
                   Specificity = conf_matrix_1$byClass["Specificity"],
                   Precision =  conf_matrix_1$byClass["Precision"],
                   AIC= log_model$aic, 
-                  ROC = auc(roc(test_data$critical_priority, log_model_prob)))
+                  ROC = auc(roc(test_data$critical_priority, log_model_pred)))
 
 conf_matrix_1
 
@@ -1060,9 +1065,9 @@ ggplot(data.frame(Feature = feature_names[sort_coef], Coefficient = coefficients
 
 ```
 
-We tried to fix the imbalance in the target variable using SMOTE() function and train the logistic model again (without excluding  item_type_Vegetables and item_type_Snacks variables). The result of SMOTE() was a dataset with 840 observations, where the target variable was balanced (50% for class 1 and 50% for class 0).
+We tried to fix the imbalance in the target variable using SMOTE() function and train the logistic model again (without excluding  item_type_Vegetables and item_type_Snacks variables). The result of SMOTE() was a training dataset with 840 observations, where the target variable was balanced (50% for class 1 and 50% for class 0).  F1 score was `0.37` (our model 37% was accurate in predicting positive cases).
 
-The accuracy became lower `56%`. The sensitivity for class 1 now 50%, this case was much better comparing to the data with imbalance where the sensitivity was less than 1%. We kept these results for the further comparison.
+The accuracy became lower `56%`. The sensitivity for class 1 now 50%, this case was much better comparing to the data with imbalance where the sensitivity was less than 6%. We kept these results for the further comparison. 
 ```{r smote_log_small, warning=FALSE, message=FALSE}
 set.seed(42) # for repet results
 trainSplit <- as.data.frame(train_data)
@@ -1092,7 +1097,7 @@ results <- tibble(Model = "Model #1 - Log Regression 1000 Sales", Accuracy=conf_
                   Specificity = conf_matrix_1$byClass["Specificity"],
                   Precision =  conf_matrix_1$byClass["Precision"],
                   AIC= log_model$aic, 
-                  ROC = auc(roc(test_data$critical_priority, log_model_prob)))
+                  ROC = auc(roc(test_data$critical_priority, log_model_pred)))
 
 conf_matrix_1
 
@@ -1102,7 +1107,7 @@ conf_matrix_1
 #### Assumptions
 
 The linear link between the independent variables and the logit transformation of the response variable was required by the Logistic regression model. 
-The visualization below showed no required linearity between independent variables and the log-odds of the target.
+The visualization below showed some of the linearity between independent variables and the log-odds of the target.
 
 
 ```{r linearity_log}
@@ -1132,6 +1137,7 @@ ggplot(data, aes(logit, predictor.value))+
 Also, observations had to be independent of each other. As this is a randomly created dataset, we could assume that each sale record was independent.
 
 There had to be no multicollinearity. The correlation matrix below didn't show extremely high multicollinearity. However, variables `total_revenue`, `total_cost`, `total_profit` were related and could be a multicollinearity issue, they were not used in the logistic regression model.
+The were no much correlation between variables used in the model.
 
 
 ```{r corr_log}
@@ -1148,13 +1154,13 @@ corrplot(coeff, tl.cex = .7, tl.col="black", method = 'color', addCoef.col = "bl
 
 ### 4.2 Logistic regression - 50000 Sales
 
-The generalized linear model was built based on the transformed training dataset with categorical variables transformed to dummy variables. The variables `total_profit`, `total_cost`, `total_revenue` were dropped as in the model. The same glm() function was used to build the model.
+The generalized linear model was built based on the transformed training dataset with categorical variables transformed to dummy variables. The variables `total_profit`, `total_cost`, `total_revenue` were dropped as in the previous model. The same glm() function was used to build the model.
 
 A positive coefficient meant that as the predictor variable grew, so did the log odds of the outcome occurring, increasing the likelihood of the outcome.
 A negative coefficient implied the inverse.
 The data was balanced to better predict class 1.
 
-The result of SMOTE() was a dataset with 840 observations, where the target variable was balanced (50% for class 1 and 50% for class 0).
+The result of SMOTE() was a dataset with 39828 observations, where the target variable was balanced (50% for class 1 and 50% for class 0).
 
 ```{r smote_log_large, warning=FALSE, message=FALSE}
 set.seed(42) # for repet results
@@ -1167,6 +1173,7 @@ prop.table(table(trainSplit_large$critical_priority))
 ```
 
 ```{r}
+set.seed(42)
 # Build logistic regression model
 log_model_large <- glm(critical_priority ~ . -total_profit - total_revenue - total_cost , data = trainSplit_large, binomial(link = "logit"), control = glm.control(maxit = 1000))
 
@@ -1183,7 +1190,9 @@ summ(log_model_large)
 
 The Akaike information criterion (`AIC`) was `55092.61` which could be high, there was a need to compare with other models.
 
-The `accuracy` of the model was 52%, lower than for the 1000 sales. The Logistic Regression model predicted 47% of the class 1. The model predicted the target, this couldn't happen with imbalanced data.
+The `accuracy` of the model was 52%, lower than for the 1000 sales. The Logistic Regression model predicted 47% of the class 1. The model predicted the target, this couldn't happen with imbalanced data. `F1 score` of `0.33` combined the precision and recall scores of a model (our model was 33% accurate in predicting positive cases and 67% inaccurate in predicting negative cases).
+
+`AUC for the ROC curve` was `0.5`, it ranked a random positive example higher than a random negative example 50% of the time.
 
 The `null deviance` of `55213.33` defined how well the target variable could be predicted by a model with only an intercept term.
 
@@ -1208,7 +1217,7 @@ results <- rbind(results, tibble(Model = "Model #2 - Log Regression 50000 Sales"
                   Specificity = conf_matrix_2$byClass["Specificity"],
                   Precision = conf_matrix_2$byClass["Precision"],
                   AIC= log_model_large$aic,
-                  ROC = NA)) #auc(roc(test_data$critical_priority, log_model_prob_large)))) 
+                  ROC = auc(roc(test_data_large$critical_priority, log_model_pred_large)))) # 
 
 conf_matrix_2
 
@@ -1238,7 +1247,7 @@ ggplot(data.frame(Feature = feature_names[sort_coef], Coefficient = coefficients
 #### Assumptions
 
 The linear link between the independent variables and the logit transformation of the response variable was required by the Logistic regression model. 
-The visualization below showed no required linearity between independent variables and the log-odds of the target.
+The visualization below showed some of the linearity between independent variables and the log-odds of the target.
 
 The code below took too much time to run, the eval was set to FALSE to be able to post the report.
 ```{r linearity_log_large, eval=FALSE}
@@ -1268,7 +1277,7 @@ ggplot(data, aes(logit, predictor.value))+
 Also, observations had to be independent of each other. As this is a randomly created dataset, we could assume that each sale record was independent.
 
 There had to be no multicollinearity. The correlation matrix below didn't show extremely high multicollinearity. However, variables `total_revenue`, `total_cost`, `total_profit` were related and could be a multicollinearity issue, they were not used in the logistic regression model.
-The correlation between variables looked less than in the small data.
+The correlation between variables looked less than in the small data (coefficients were almost 0).
 
 
 ```{r corr_log_large}
@@ -1283,7 +1292,7 @@ corrplot(coeff, tl.cex = .7, tl.col="black", method = 'color', addCoef.col = "bl
 
 
 
-### 4.2 Cross-validation - 1000 Sales
+### 4.3 Cross-validation - 1000 Sales
 The the k-fold cross-validation with Lasso regularization was used in order to improve feature selection for the Logistic regression model. The balanced data after SMOTE() was used with all the variables.
 
 ```{r lasso__model}
@@ -1301,11 +1310,13 @@ lasso_model<- cv.glmnet(x_train,
 
 ```
 
-The `accuracy` of the Lasso model was 54.5% instead of the previous 56% in the Logistic model for 1000 sales. The AUC score of 0.52 didn't suggest discriminative power. Based on the confusion matrix, the model performed the same way in predicting critical priority as it was shown by the precision and recall values for class 1.
+The `accuracy` of the Lasso model was 52% instead of the previous 56% in the Logistic model for 1000 sales. The AUC score of 0.46 didn't suggest discriminative power. Based on the confusion matrix, the model performed worse in predicting critical priority as it was shown by the precision and recall values for class 1. `F1 score` was `0.27` (our model was 27% accurate in predicting positive cases), worse than in the previous models.
 
-The Lasso regularization showed that  all region variables except for "Central America and the Carribean" and "Europe", all item_type variables except for "Clothes", "Meat", "Personal Care", "Snacks", variables ship_time, order_month, order_year were essential for the model.
+`AUC for the ROC curve` was `0.46`, it ranked a random positive example higher than a random negative example 46% of the time. The `residual deviance` of ` 1.42` showed that our model could predict the response variable much better than the model without Lasso.
 
-The Akaike information criterion (`AIC`) was `-45` which was better comparing to all the previous models.
+The Lasso regularization showed that  all region variables except for "Central America and the Carribean" and "Europe", all item_type variables except for "Clothes", "Personal Care", "Snacks", variables ship_time, order_month, order_year, units_sold were essential for the model.
+
+The Akaike information criterion (`AIC`) was `-38` which was better comparing to all the previous models.
 
 ```{r}
 glmnet_cv_aicc <- function(fit, lambda = 'lambda.min'){
@@ -1353,7 +1364,7 @@ results <- rbind(results,tibble(Model = "Model #3 - Lasso Model 1000 Sales", Acc
                   Specificity = conf_matrix_3$byClass["Specificity"],
                   Precision =  conf_matrix_3$byClass["Precision"],
                   AIC= lasso.r2$AICc, 
-                  ROC = auc(roc(y_test, as.numeric(lasso_prob)))))
+                  ROC = auc(roc(as.numeric(y_test), as.numeric(lasso_pred)))))
 ```
 
 #### Assumptions
@@ -1364,7 +1375,7 @@ The observations had to be independent of each other. As this is a randomly crea
 Each fold in the k-fold cross-validation had to have approximately the same proportion of samples of each target class (stratified sampling).
 
 
-### 4.3 Cross-validation - 50000 Sales
+### 4.4 Cross-validation - 50000 Sales
 
 The steps to build the k-fold cross-validation with Lasso regularization were repeated for 50000 sales.
 
@@ -1383,7 +1394,9 @@ lasso_model_large <- cv.glmnet(x_train_large,
 
 ```
 
-The `accuracy` of the Lasso model was 51%, almost the same as in the model without cross-validation. The AUC score of 0.5 didn't suggest discriminative power. Based on the confusion matrix, the model the same as previous models with 50% sensitivity when predicting critical priority as it was shown by the precision and recall values for class 1.
+The `accuracy` of the Lasso model was 51%, almost the same as in the model without cross-validation. The AUC score of 0.5 didn't suggest discriminative power. Based on the confusion matrix, the model the same as previous models with 49% sensitivity when predicting critical priority as it was shown by the precision and recall values for class 1.
+
+`F1 score` was `0.33` (our model was 33% accurate in predicting positive cases), the same as for the model without Lasso. `AUC for the ROC curve` was `0.5`. The `residual deviance` of ` 1.38` showed that our model could predict the response variable much better than the model without Lasso.
 
 The Lasso regularization showed that  all region variables except for "Australia and Oceania", sales_channel, units_sold, order_month were essential for the model.
 
@@ -1410,7 +1423,6 @@ lasso.r1 <- assess.glmnet(lasso_model_large,
                                 newy = y_test_large)   
 lasso.r2 <- glmnet_cv_aicc(lasso_model_large, 'lambda.min')
 
-lasso.r1$auc[1]
 
 conf_matrix_4
 
@@ -1423,7 +1435,7 @@ results <- rbind(results,tibble(Model = "Model #4- Lasso Model 50000 Sales", Acc
                   Specificity = conf_matrix_4$byClass["Specificity"],
                   Precision =  conf_matrix_4$byClass["Precision"],
                   AIC= lasso.r2$AICc,
-                  ROC = auc(roc(y_test_large, as.numeric(lasso_prob_large)))))
+                  ROC = auc(roc(as.numeric(y_test_large), as.numeric(lasso_pred_large)))))
 ```
 
 #### Assumptions
@@ -1435,16 +1447,17 @@ Each fold in the k-fold cross-validation had to have approximately the same prop
 
 ### 4.5 Random Forest - 1000 Sales
 
-Next, we tried  Random Forest Regression model for the small dataset. The original data without additional dummy variables with fixed imbalace in the target variables was used. The variables `total_profit`, `total_cost`, `total_revenue` were dropped as in the model as they were correlated.
+Next, we tried  Random Forest Regression model for the small dataset. The original data without additional dummy variables with fixed imbalace in the target variables was used. The variables `total_profit`, `total_cost`, `total_revenue` were dropped as they were derived from other variables.
 
 ```{r rf_model}
+set.seed(42)
 # Build a Random Forest model
 rf_model <- randomForest(critical_priority ~ . -total_profit -total_cost -total_revenue, data = split_rf, ntree = 100, importance = TRUE)
 print(rf_model)
 ```
 
 
-The `accuracy` of the model was 57.5%. Comparing to th previous models, the Random forest model had a accuracy better but predicted worse critical priority as it was shown by the precision and recall values for class 1 (Sensitivity 35%).
+The `accuracy` of the model was 57%. Comparing to th previous models, the Random forest model had a accuracy better but predicted worse critical priority as it was shown by the precision and recall values for class 1 (Sensitivity 40%). `F1 score` was `0.33` (our model was 33% accurate in predicting positive cases). `AUC for the ROC curve` was `0.52`. 
 
 
 ```{r rd_pred, warning=FALSE, message=FALSE}
@@ -1465,7 +1478,7 @@ results <- rbind(results, tibble(Model = "Model #5 - Random Forest 1000 Sales", 
                   Specificity = conf_matrix_5$byClass["Specificity"],
                   Precision = conf_matrix_5$byClass["Precision"],
                   AIC= NA,
-                  ROC = NA))
+                  ROC = auc(roc(test_data_rf$critical_priority, as.numeric(rf_model_pred)))))
 
 conf_matrix_5
 
@@ -1485,8 +1498,8 @@ Although Random Forest Regression didn't have strict assumptions like linear mod
 For example, there was no need for a data transformations or the need to follow a specific distribution as non-linear interactions can be captured without any explicit transformation. 
 
 
-The plot below depicted a single forest decision tree. Each node reflects a decision depending on the value of a feature. The decision seeks to separate the data in such a way that the purity of the resulting child nodes is increased. Because the tree makes binary choices, there are always two branches.
-The anticipated class is shown by the color of the leaf nodes, with darker colors signifying better predictions.
+The plot below depicted a single forest decision tree. Each node reflected a decision depending on the value of a feature. The decision tried to separate the data in such a way that the purity of the resulting child nodes was increased. Because the tree made binary choices, there were always two branches.
+The anticipated class was shown by the color of the leaf nodes, with darker colors signifying better predictions.
 
 ```{r}
 
@@ -1511,12 +1524,13 @@ As the last model, Random Forest Regression model for the large dataset.
 Building the model for the larger dataset took significantly more time compared to the smaller dataset
 
 ```{r rf_model_large}
+set.seed(42)
 # Build a Random Forest model
 rf_model_large <- randomForest(critical_priority ~ . -total_profit -total_cost -total_revenue, data = split_rf_large, ntree = 100, importance = TRUE)
 print(rf_model_large)
 ```
 
-The `accuracy` of the model was 71%, better than all the previous modelss. The Random Forest model predicted certain crucial events, but with low precision and recall, the sensitivity was only 0.8%.
+The `accuracy` of the model was 71%, better than all the previous models. The Random Forest model predicted certain crucial events, but with low precision and recall, the sensitivity was only 9%. `F1 score` was `0.14` (our model was 14% accurate in predicting positive cases). `AUC for the ROC curve` was `0.5`. 
 
 ```{r rd_pred_large, warning=FALSE, message=FALSE}
 # Predict test data
@@ -1536,7 +1550,7 @@ results <- rbind(results, tibble(Model = "Model #6 - Random Forest 50000 Sales",
                   Specificity = conf_matrix_6$byClass["Specificity"],
                   Precision =NA,
                   AIC= NA,
-                  ROC = NA))
+                  ROC = auc(roc(test_data_large_rf$critical_priority, as.numeric(rf_model_pred_large)))))
 
 conf_matrix_6
 
@@ -1575,13 +1589,11 @@ rpart.plot(single_tree)
 
 ## 5. Model selection
 
-The performance of Logistic Regression was quite close for both datasets.
-The accuracy of both Logistic Regression and Random Forest models was marginally greater for the "50000 Sales Records" dataset than for the "1000 Sales Records" dataset. For both datasets, the performance of Logistic Regression was consistently dismal in terms of critical priorities Precision, and Recall for class 1. The Lasso regularization didn't improve the logistic regression.
-
+The accuracy of both Logistic Regression was almost the same for the "50000 Sales Records" and for the "1000 Sales Records" dataset. Though the Random Forest showed the accuracy greater for a larger data. The results improved a little for 50,000 sales with Lasso regularization and became worse for 1,000 sales. The Random forest worked better with 1,000 sales than with 50,000 sales. 
 
 Both algorithms struggled to reliably identify essential priorities, especially the Random Forest for 50000 sales. This could be due to the imbalance in the classes of the original data that we had to fix with SMOTE function, the necessity for more complex modeling methodologies (tuning hyperparameters, feature engineering, or using other modeling techniques), and the synthetic nature of the data.
 
-Anyway, the Random Forest Regression looked like a better choice, it could predict some of the class 1 values. There were no requirements for preprocessing tasks such as scaling and normalization of each feature. In reality, the larger datasets can give better results as it is more representative, and models can be trained on more diverse data, making them more robust and less prone to overfitting.
+Anyway, the Random Forest Regression would be a better choice with a real data. I would also choose this model for a small data, it worked with better results (accuracy, f1, sensitivity), it could predict some of the class 1 values. There were no requirements for preprocessing tasks such as scaling and normalization of each feature. For a large data I would choose Logistic regression with Lasso regularization, it had similar results to other models but didn't use all the features for training and had better AIC value. In reality, the larger datasets could give better results with a Random Forest as it was more representative, and models could be trained on more diverse data, making them more robust and less prone to overfitting though the time spent on the training and the requirements for computer's capabilities would be higher.
 
 
 ```{r}
@@ -1604,7 +1616,7 @@ results %>%
 
 ## 6. Conclusion
 
-The provided datasets were generated using random logic and were not genuine sales data. Since the data was randomly generated, the patterns, connections, and distributions within the data were not indicative of real-world sales circumstances. As a result, any patterns or associations found by the models could be artifacts of the random data generating process rather than real-world occurrences. Both our Logistic Regression and Random Forest models struggled to identify significant priorities in both datasets. This difficulty was caused by the data's inherent randomness, which lacks any underlying patterns that a model could leverage. Models trained on this data should not be used in real-world circumstances. The provided data was not adequate for true predictive modeling applications. The above work could be used for the preprocessing of sales data as it wouldn't lead to costly mistakes on real data. In reality, if I had to make a business choice, I'd choose a model for the dataset with 50,000 sales as it had a larger sample size and was more likely to produce a more generic model. As mentioned above in the results and remembering the pros and cons of both algorithms, I would choose Random Forest Regression.
+The provided datasets were generated using random logic and were not genuine sales data. Since the data was randomly generated, the patterns, connections, and distributions within the data were not indicative of real-world sales circumstances. As a result, any patterns or associations found by the models could be artifacts of the random data generating process rather than real-world occurrences. Both our Logistic Regression and Random Forest models struggled to identify significant priorities in both datasets. This difficulty was caused by the data's inherent randomness, which lacks any underlying patterns that a model could leverage. Models trained on this data should not be used in real-world circumstances. The provided data was not adequate for true predictive modeling applications. The above work could be used for the preprocessing of sales data as it wouldn't lead to costly mistakes on real data. In reality, if I had to make a business choice, I'd choose a model for the dataset with 50,000 sales as it had a larger sample size and was more likely to produce a more generic model. As mentioned above in the results and remembering the pros and cons of both algorithms, I would choose Random Forest Regression. But with these random data, the Random Forest model was a selection for 1,000 sales, Logistic regression with Lasso regularization for 50,000 sales.
 
 As a result, the randomly generated data might be valuable for practice and testing, but it is critical to understand its limitations when evaluating results or contemplating its use.
 
@@ -1628,9 +1640,9 @@ As a result, the randomly generated data might be valuable for practice and test
 
 We methodically threaded through stages from data preparation to model selection as we embarked on the analytical journey of our sales datasets. This procedure was intended to be methodical as well as enlightening.
 
-The datasets with 1000 sales and 50000 sales, both with 17 predictor variables. There was no specific label for supervised learning. However, we created a new variable from `order_priority` called `critical_priority` to predict if the order was of a critical priority based on other features. Correlations between columns were thoroughly evaluated during the data processing phase. Notably, there was a substantial link between total_revenue, total_cost, and total_profit.
+The datasets with 1000 sales and 50000 sales, both with 17 predictor variables. There was no specific label for supervised learning. However, we created a new variable from `order_priority` called `critical_priority` to predict if the order was of a critical priority based on other features. Correlations between columns were thoroughly evaluated during the data processing phase. Notably, variables total_revenue, total_cost, and total_profit were derived from the variables unit_sold, unit_cost, unit_price.
 
-The first critical step was data transformation. The target variable was the `critical_priority` column built from `Order Priority`. The critical orders were substituted with a `1` and all others with a `0`. The datasets were refined further for clarity and efficiency: columns were given standardized names, dates were formatted consistently, and extraneous columns such as  `Country` and `Order ID` were removed. The `Order Date` and `Ship Date` columns were used to create new columns `order_year`, `order_month` and were removed. The datasets were also prepared for algorithmic processing by converting many character columns into model-compatible dummy variables.
+The first critical step was data transformation. The target variable was the `critical_priority` column built from `Order Priority`. The critical orders were substituted with a `1` and all others with a `0`. The datasets were refined further for clarity and efficiency: columns were given standardized names (`Order.Priority` became `order_priority`), dates were formatted consistently, and extraneous columns such as  `Country` and `Order ID` were removed. The `Order Date` and `Ship Date` columns were used to create new columns `order_year`, `order_month`, `ship_time` and were removed. The datasets were also prepared for algorithmic processing by converting many character columns into model-compatible dummy variables.
 
 As the target variable was binary, the following algorithms were considered. The following data preparation was based on this algorithm selection. The choice of the algorithms wasn't affected by the size of the data, only by the nature of the target variable.
 
@@ -1640,28 +1652,32 @@ As the target variable was binary, the following algorithms were considered. The
 
 Logistic Regression was chosen because of its simplicity and applicability for binary classification challenges. Random Forest was used to capture any non-linear relationships in the dataset. The size of the dataset also influenced the decision, as training a more sophisticated model on a larger dataset took substantially longer.
 
-The datasets were divided into training (80%) and testing (20%) sets prior to modeling to ensure unbiased validation and a realistic evaluation of model performance on unknown data. The categorical variables were transformed to dummies for the Logistic models, the data without dummy variables was used for Random Forest. For the Lasso model, the training and testing data with all variables (no dummies) was transformed to matrix. All datasets had imalance in the target variable (~75% for class 0 and ~25% for class 1). With imbalanced data, most machine learning models predicted the majority class more efficiently than the minority class. To address this behavior, we utilized SMOTE() function the data in order to achieve higher accuracy rates between classes. The SMOTE function oversampled the minority class by using bootstrapping and k-nearest neighbor to synthetically create additional observations of that event. We tried to run models with imbalanced data and without.
+The datasets were divided into training (80%) and testing (20%) sets prior to modeling to ensure unbiased validation and a realistic evaluation of model performance on unknown data. The categorical variables were transformed to dummies for the Logistic models, the data without dummy variables was used for Random Forest. For the Lasso model, the training and testing data with all variables (no dummies) was transformed to matrix. All datasets had imbalance in the target variable (~75% for class 0 and ~25% for class 1). With imbalanced data, most machine learning models predicted the majority class more efficiently than the minority class. To address this behavior, we utilized SMOTE() function the data in order to achieve higher accuracy rates between classes. The SMOTE function oversampled the minority class by using bootstrapping and k-nearest neighbor to synthetically create additional observations of that event. We tried to run models with imbalanced data and without.
 
 
 `Logistic Regression - 1,000 Sales`
-A logistic regression model was built for the smaller dataset of 1,000 sales. Due to their intricate relationship and probable multicollinearity, variables such as total_profit, total_cost, total_revenue were omitted. The logistic regression model had a 56.5% accuracy. This model's Akaike information criterion (AIC) was 1140, indicating room for improvement. The Receiver Operating Characteristic (ROC) curve's area under the curve (AUC) was just 0.53. According to the confusion matrix, the model predicted important priority with 50% sensitivity, as evidenced by the precision and recall values for class 1. According to feature importance, sales of domestic goods, fruits, and cosmetics were more likely to be prioritized, whereas beverage sales were not.
+A logistic regression model was built for the smaller dataset of 1,000 sales. Due to their intricate relationship and probable multicollinearity, variables such as total_profit, total_cost, total_revenue were omitted, variables item_type_Vegetables,  item_type_Snacks were removed as the model ran error when predicting the probabilities, the rank of the data matrix was at least equal to the number of parameters, it was not. The logistic regression model had a 71% accuracy. This model's Akaike information criterion (AIC) was 926, indicating room for improvement. According to the confusion matrix, the model predicted important priority with 6% sensitivity, as evidenced by the precision and recall values for class 1. F1 score of 0.095 combined the precision and recall scores of a model (our model was 9.5% accurate in predicting positive cases and 90.5% inaccurate in predicting negative cases). According to feature importance, sales of fruits, and household items were more likely to be prioritized, whereas beverage sales were not.
+
+We tried to fix the imbalance in the target variable using SMOTE() function and train the logistic model again (without excluding item_type_Vegetables and item_type_Snacks variables). The result of SMOTE() was a training dataset with 840 observations, where the target variable was balanced (50% for class 1 and 50% for class 0). F1 score was 0.37 (our model 37% was accurate in predicting positive cases). The accuracy became lower 56%. The sensitivity for class 1 now 50%, this case was much better comparing to the data with imbalance where the sensitivity was less than 6%. F1 score was 0.37 (our model 37% was accurate in predicting positive cases). AUC for the ROC curve was 0.5, it ranked a random positive example higher than a random negative example 50% of the time. The residual deviance of 1090 defined how well the target variable can be predicted by our current model that we fit with predictor variables mentioned above. The lower the value, the better the model could predict the value of the response variable.
 
 `Logistic Regression - 50,000 Sales`
-For the larger dataset, the same logistic regression model was applied with similar variable exclusions. This model's accuracy was slightly better at 52%, but its AIC was significantly higher at 55092.61. Intriguingly, the feature importance differed for this model. Sales from beverages and regions like Sub-Saharan Africa were prioritized, while categories like cosmetics, fruits, and household goods were deprioritized. The model predicted class 1 with sensitivity of 47%. This result was worse comparing to the result for 1000 sales.
+For the larger dataset, the same logistic regression model was applied with similar variable exclusions. The imbalance was fixed with the SMOTE() function (50% for class 1 and 50% for class 0 instead of 25%/75%), variables such as total_profit, total_cost, total_revenue were omitted. This model's accuracy was 52%, lower than for the 1,000 sales. AIC was significantly at 55092.61. The feature importance showed units sold and item type Cosmetics had the largest positive influence, indicating that sales from this item were more likely to be prioritized. Item type clothes had the largest negative influence, indicating that sales from this category were less likely to be a major priority. The model predicted class 1 with sensitivity of 47%. This result was worse comparing to the result for 1,000 sales. F1 score of 0.33 combined the precision and recall scores of a model (our model was 33% accurate in predicting positive cases and 67% inaccurate in predicting negative cases). AUC was the same, 0.5. The residual deviance of 55042.615 showed that our model couldn’t predict well the response variable.
 
 `Cross-validation - 1,000 & 50,000 Sales`
-Lasso regularization was developed to improve feature selection in the logistic regression model. The accuracy improved to 52% for the 1,000 sales dataset and 51% for the 50,000 sales dataset. For 1,000 sales, the Lasso regularization showed that  all region variables except for "Central America and the Carribean" and "Europe", all item_type variables except for "Clothes", "Meat", "Personal Care", "Snacks", variables ship_time, order_month, order_year were essential for the model. For 50,000 sales, the Lasso regularization showed that  all region variables except for "Australia and Oceania", sales_channel, units_sold, order_month were essential for the model.
+Lasso regularization was developed to improve feature selection in the logistic regression model. The accuracy improved to 52% for the 1,000 sales dataset and 51% for the 50,000 sales dataset. The AIC was -38 for 1,000 sales and -86 for 50,000 sales, these AIC results was better than in the previous models.  F1 score was 0.27 (our model was 27% accurate in predicting positive cases) and sensitivity 35% for 1,000 sales and 0.33 / 49% for 50,000 sales. AUC for the ROC curve was 0.46 for 1,000 sales, it ranked a random positive example higher than a random negative example 46% of the time. The residual deviance of 1.42 showed that our model could predict the response variable much better than the model without Lasso. AUC for the ROC curve was 0.5 for 50,000 sales. The residual deviance of 1.38 showed that our model could predict the response variable much better than the model without Lasso. The results improved a little for 50,000 sales with Lasso regularization and became worse for 1,000 sales.
+
+For 1,000 sales, the Lasso regularization showed that  all region variables except for “Central America and the Carribean” and “Europe”, all item_type variables except for “Clothes”, “Personal Care”, “Snacks”, variables ship_time, order_month, order_year, units_sold were essential for the model. For 50,000 sales, the Lasso regularization showed that all region variables except for “Australia and Oceania”, sales_channel, units_sold, order_month were essential for the model.
 
 `Random Forest - 1,000 & 50,000 Sales`
-Following that, Random Forest, a well-known ensemble learning method, was used. The algorithm attained a 51% accuracy for the 1,000 sales dataset. The larger dataset of 50,000 sales, on the other hand, provided an accuracy of 70%. For both datasets, feature significance plots revealed that 'units sold' was the most influential variable. The precision and recall values for class 1 for both datasets showed that the Random forest model predicted critical priority worse than the previous models (sensitivity 0.8%).
-The performance of Logistic Regression was quite close for both datasets.
-The accuracy of both Logistic Regression and Random Forest models was marginally greater for the "50000 Sales Records" dataset than for the "1000 Sales Records" dataset. For both datasets, the performance of Logistic Regression was consistently dismal in terms of critical priorities Precision, and Recall for class 1. The Lasso regularization didn't improve the logistic regression.
+Following that, Random Forest, a well-known ensemble learning method, was used. The algorithm attained a 57% accuracy for the 1,000 sales dataset. The larger dataset of 50,000 sales, on the other hand, provided an accuracy of 71%. For both datasets, feature significance plots revealed that 'units sold' was the most influential variable. The precision and recall values for class 1 for large dataset showed that the Random forest model predicted critical priority worse than the previous models (sensitivity 9%, f1 score 0.136). For 1,000 sales these metrics stayed almost the same but the accuracy increased (sensitivity 40%, f1 score 0.33). The AUC stayed almost the same for both models, 0.5 The Random forest worked better with 1,000 sales than with 50,000 sales. 
+
+The accuracy of both Logistic Regression was almost the same for the "50000 Sales Records" and for the "1000 Sales Records" dataset. Though the Random Forest showed the accuracy greater for a larger data. The results improved a little for 50,000 sales with Lasso regularization and became worse for 1,000 sales. The Random forest worked better with 1,000 sales than with 50,000 sales. 
 
 
 Both algorithms struggled to reliably identify essential priorities, especially the Random Forest for 50000 sales. This could be due to the imbalance in the classes of the original data that we had to fix with SMOTE function, the necessity for more complex modeling methodologies (tuning hyperparameters, feature engineering, or using other modeling techniques), and the synthetic nature of the data.
 
-Anyway, the Random Forest Regression looked like a better choice, it could predict some of the class 1 values. There were no requirements for preprocessing tasks such as scaling and normalization of each feature. In reality, the larger datasets can give better results as it is more representative, and models can be trained on more diverse data, making them more robust and less prone to overfitting.
+Anyway, the Random Forest Regression would be a better choice with a real data. I would also choose this model for a small data, it worked with better results (accuracy, f1, sensitivity), it could predict some of the class 1 values. There were no requirements for preprocessing tasks such as scaling and normalization of each feature. For a large data I would choose Logistic regression with Lasso regularization, it had similar results to other models but didn't use all the features for training and had better AIC value. In reality, the larger datasets could give better results with a Random Forest as it was more representative, and models could be trained on more diverse data, making them more robust and less prone to overfitting.
 
-The provided datasets were generated using random logic and were not genuine sales data. Since the data was randomly generated, the patterns, connections, and distributions within the data were not indicative of real-world sales circumstances. As a result, any patterns or associations found by the models could be artifacts of the random data generating process rather than real-world occurrences. Both our Logistic Regression and Random Forest models struggled to identify significant priorities in both datasets. This difficulty was caused by the data's inherent randomness, which lacks any underlying patterns that a model could leverage. Models trained on this data should not be used in real-world circumstances. The provided data was not adequate for true predictive modeling applications. The above work could be used for the preprocessing of sales data as it wouldn't lead to costly mistakes on real data. In reality, if I had to make a business choice, I'd choose a model for the dataset with 50,000 sales as it had a larger sample size and was more likely to produce a more generic model. As mentioned above in the results and remembering the pros and cons of both algorithms, I would choose Random Forest Regression.
+The provided datasets were generated using random logic and were not genuine sales data. Since the data was randomly generated, the patterns, connections, and distributions within the data were not indicative of real-world sales circumstances. As a result, any patterns or associations found by the models could be artifacts of the random data generating process rather than real-world occurrences. Both our Logistic Regression and Random Forest models struggled to identify significant priorities in both datasets. This difficulty was caused by the data's inherent randomness, which lacks any underlying patterns that a model could leverage. Models trained on this data should not be used in real-world circumstances. The provided data was not adequate for true predictive modeling applications. The above work could be used for the preprocessing of sales data as it wouldn't lead to costly mistakes on real data. In reality, if I had to make a business choice, I'd choose a model for the dataset with 50,000 sales as it had a larger sample size and was more likely to produce a more generic model. As mentioned above in the results and remembering the pros and cons of both algorithms, I would choose Random Forest Regression. But with these random data, the Random Forest model was a selection for 1,000 sales, Logistic regression with Lasso regularization for 50,000 sales.
 
 As a result, the randomly generated data might be valuable for practice and testing, but it is critical to understand its limitations when evaluating results or contemplating its use.
