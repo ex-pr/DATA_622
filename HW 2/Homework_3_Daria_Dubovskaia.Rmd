@@ -1,0 +1,672 @@
+---
+title: 'Homework 3'
+author: 'Daria Dubovskaia'
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    theme: united
+editor_options:
+  chunk_output_type: console
+  markdown: 
+    wrap: sentence
+---
+
+
+```{r setup, include=FALSE}
+# chunks
+knitr::opts_chunk$set(eval=TRUE, message=FALSE, warning=FALSE, fig.height=5, fig.align='center')
+
+# libraries
+library(partykit)
+library(kableExtra)
+library(ranger)
+library(viridis)
+library(tidyverse)
+library(caTools)
+library(reshape)
+library(summarytools)
+library(gridExtra)
+library(MASS) 
+library(lubridate)
+library(skimr)
+library(yardstick)
+library(randomForest)
+library(corrplot)
+library(Hmisc)
+library(jtools)
+library(glmnet)
+library(caret)
+library(smotefamily)
+library(recipes)
+library(DMwR)
+
+library(treemap)
+library(ggplot2)
+library(pROC)
+library(e1071)
+
+
+# random seed
+set.seed(42)
+```
+
+
+
+## Overview
+Individuals' quality of life is influenced by a variety of factors, including genetics, lifestyle choices, access to healthcare, and environmental conditions. Cardiovascular health is a critical element that often goes unrecognized. Heart disease has become a global concern, affecting the health of millions. They discourage people from leading active lives, pursuing their passions, and contributing to society successfully. When cardiovascular problems appear, they not only become difficult to manage, but they also inflict significant financial and emotional pressures on families and healthcare systems. Despite medical advances, there is no universal agreement on preventative strategies.
+
+This assignment focused on the prediction and understanding of heart disorders. We specifically used a dataset compiled from a We investigated, evaluated, and built models for a dataset containing health indicators and behaviors of around 4,238 people, with a focus on factors potentially contributing to heart disease.
+
+We began by scanning the dataset for potential problems such as missing values, abnormalities, and suspected collinearity among predictors. Following the initial inspection, we began the data purification process, correcting the highlighted concerns.
+
+With the improved information in hand, we built SVM model leveraging its ability to find best boundary (or hyperplane) that separates the data into different classes. We tested our model's performance against a predefined evaluation set after training them. After doing our research, we compared the use of decision trees from the previous assignment with the current SVM model. Based on health measurements and behaviors, this model attempts to estimate the chance of a person having a heart attack.
+
+------------------------------------------------------------------------
+
+## 1. Data Preparation
+
+```{r data_load}
+#Load data
+data <- read.csv("https://raw.githubusercontent.com/ex-pr/DATA_622/main/HW%202/heart_disease.csv")
+```
+
+
+### 1.1 Summary Statistics
+
+The dataset contained **4238** observations of 16 predictor variables.  
+
+Each record represented a patient, and each column represented a health aspect. The `Heart_ stroke` was the target, it specified whether or not the patient experienced a stroke. Specifically:
+
+-    `Gender`: Gender of the patient (Male, Female)
+-    `age`: Age of the patient
+-    `education`:  Education of the patient (Uneducated, Primary School, Graduate, Postgraduate)
+-    `current smoker`: "1" if the patient is smoking, "0" otherwise
+-    `cigsperDay`: Number of cigarettes per day
+-    `BPMeds`: "1" if the patient is on a blood pressure medication, "0" otherwise
+-    `prevalentStroke`: "1" if the patient has a history of stroke, "0" otherwise
+-    `prevalentHyp`: "1" if the patient has prevalent hypertension, "0" otherwise
+-    `diabetes`:  "1" if the patient has diabetes, "0" otherwise
+-    `totChol`: Total cholesterol level
+-    `sysBP`: Systolic blood pressure
+-    `diaBP`: Diastolic blood pressure
+-    `BMI`: Body Mass Index
+-    `heartRate`: Heart rate of the patient
+-    `glucose`: Glucose level of the patient
+-    `Heart_ stroke`: "1" if the patient had a heart stroke, "0" otherwise
+
+As the target variable was binary, the following algorithms were considered. The following data preparation was based on this algorithm selection. The choice of the algorithm wasn't affected by the size of the data, only by the nature of the target variable and the assignment.
+
+`Support Vector Machine`: it performs reasonably well when there is a distinct margin of difference between classes, one of the best choices for spaces with high dimensions, computationally effective. On the other hand, we should remember that large data sets are not a good fit for the SVM algorithm, it doesn't perform well with noisy data and if there are more features per data point than there are training data samples.
+
+
+The data source: https://www.kaggle.com/datasets/mirzahasnine/heart-disease-dataset/data
+
+
+```{r head_data}
+# Check first rows of data
+DT::datatable(
+      data[1:25,],
+      extensions = c('Scroller'),
+      options = list(scrollY = 350,
+                     scrollX = 500,
+                     deferRender = TRUE,
+                     scroller = TRUE,
+                     dom = 'lBfrtip',
+                     fixedColumns = TRUE, 
+                     searching = FALSE), 
+      rownames = FALSE) 
+```
+
+The table below provided a summary statistics for the data. There were some missing values (<10%) to be imputed.
+
+The dataset contained more female observations than males. Patients ranged in age from 32 to 70 years old, with an average age of 49.6 years. Nearly half of the people in the dataset (49.4%) were smokers. The average number of cigarettes smoked per day is 9, yet this varied from non-smokers to heavy smokers who consumed up to 70 cigarettes per day.
+
+The average systolic blood pressure was 132.35, while the average diastolic blood pressure was 82.89. 
+Almost 2.96% of the participants were taking blood pressure medication. 
+The average total cholesterol level was approximately 236.72, with values ranging from 107 to 696. 
+The average BMI was 25.8, and the average glucose level was around 81.97.
+
+About 31.1% of people had hypertension, while a minor percentage (2.57%) had diabetes.
+Only a small percentage of participants (less than 1%) had a history of stroke, indicating that it was uncommon in our sample.
+A significant fraction of patients was classified as "uneducated," while primary school students and postgraduates were also represented.
+
+The vast majority of the individuals in the dataset had never had a strokeas the target variable indicated. The imbalance in the target variable was fixed further.
+```{r summ}
+# Check summary statistics of the data
+print(dfSummary(data, text.graph.col = FALSE, graph.col = FALSE, style = "grid", valid.col = FALSE), headings = FALSE, max.tbl.height = 500, footnote = NA, col.width=10, method="render")
+```
+
+
+### 1.2 Missing values
+
+Managing missing values was one of the critical problems to fix before building the models.
+
+The missing values for continuous variables `cigsPerDay, BMI, totChol. heartRate and glucose` were imputed using the median value of their respective columns. Using the median rather than the mean reduced the impact of any outliers in the data.
+
+To fill in the missing data points for categorical variables, such as `education and BPMeds`, the mode (most often occurring value) of each column was used. This method assured that the categorical data distribution was preserved and that no unintentional biases were introduced.
+
+```{r na_impute}
+# Set seed for constant results
+set.seed(42)
+
+# Copy original data
+imputed_df <- data
+
+# Impute NAs for 'cigsPerDay', 'totChol', 'BMI', 'heartRate', and 'glucose' with their median
+imputed_df <- imputed_df %>% mutate(across(c('cigsPerDay', 'totChol', 'BMI', 'heartRate', 'glucose'), ~replace_na(., median(., na.rm=TRUE))))
+
+# Impute NAs for 'education' with its mode
+mode_education <- names(sort(table(imputed_df$education), decreasing = TRUE)[1])
+imputed_df$education[is.na(imputed_df$education)] <- mode_education
+ 
+# Transform 'BPMeds' to factor
+imputed_df$BPMeds <- as.factor(imputed_df$BPMeds)
+
+# Impute missing values for 'BPMeds' with its mode
+mode_bpmeds <- names(sort(table(imputed_df$BPMeds), decreasing = TRUE)[1])
+imputed_df$BPMeds[is.na(imputed_df$BPMeds)] <- mode_bpmeds
+```
+
+
+### 1.3 Encoding
+
+We assured that our dataset was appropriate for a broader range of algorithms that require numerical input by using one-hot encoding, boosting the potential accuracy and effectiveness of our later analysis.
+
+`Gender, 'education, and prevalentStroke` were recognized as categorical columns that would benefit from one-hot encoding.
+
+The encoding of `Gender` resulted in a new column `male`, where a value of 1 indicated a male and a value of 0 indicated a female.
+
+The encoding of `prevalentStroke` resulted in a new column `prevalStroke`, where a value of 1 indicated if a patient had a previous stroke, 0 indicated a patient without a previous stroke.
+
+The encoding of the target variable `Heart_.stroke` resulted in a new column `stroke`, where a value of 1 indicated if a patient had a stroke, 0 indicated a patient without a stroke.
+
+Three new columns were created for `education`: `postgraduate, primaryschool, and uneducated`. Each of these columns accepted a binary value, indicating whether the education level was present (1) or absent (0).
+
+The first category of each original categorical variable was eliminated throughout the encoding procedure to avoid multicollinearity and reduce redundancy.
+
+```{r encode_binary}
+# Set seed for constant results
+set.seed(42)
+
+# Copy data without NAs
+encoded_df <- imputed_df
+
+
+# Encoding 'Gender', 'Heart_.stroke', 'prevalentStroke' variables to 0 and 1
+
+encoded_df <-  encoded_df%>%
+    mutate(
+      male = factor(ifelse(Gender == "Male", 1, 0)),
+      prevalStroke = factor(ifelse(prevalentStroke == "yes", 1, 0)),
+      stroke = factor(ifelse(Heart_.stroke == "yes", 1, 0))
+    ) %>% 
+    dplyr::select(-c(Gender, prevalentStroke, Heart_.stroke))
+```
+
+
+```{r encode_education}
+
+# One hot encoding for education
+encoded_df <- encoded_df %>% 
+  mutate(across(c(education), ~as.factor(.))) %>%
+  pivot_wider(names_from = c(education), 
+              values_from = c(education), 
+              values_fill = 0, 
+              values_fn = function(x) 1)  %>%
+  dplyr::select(-c(graduate))
+```
+
+### 1.4 Column change
+
+
+Several entries in the dataset, including `diabetes, prevalentHyp, currentSmoker, BPMeds, postgraduate, primaryschool, uneducated` were converted to categorical data types. This change was performed to better depict the variables' inherent categorical character.
+
+We included a new column called `BP`. This column represented the ratio of systolic to diastolic blood pressure (from the `sysBP` and `diaBP` columns respectively). This derived attribute could provide new insights on people's cardiovascular health.
+
+```{r to_factor}
+# Transform binary variables to factors
+cols <- c("diabetes", "prevalentHyp", "currentSmoker", "BPMeds", "postgraduate", "primaryschool", "uneducated")
+encoded_df[cols] <- lapply(encoded_df[cols], factor) 
+```
+
+```{r new_col}
+# New column for the ratio of systolic to diastolic blood pressure
+encoded_df$BP <- encoded_df$sysBP / encoded_df$diaBP
+```
+
+
+### 1.5 Outliers
+
+We used boxplots to detect outliers. Several variables, including `cigsPerDay, totChol, sysBP, diaBP, BMI, heartRate, and glucose`, appeared to have possible outliers as values that fell outside the whiskers of the boxplots.
+Several variables, including `sysBP, glucose, and BP`, had a disproportionately high number of outliers. These outliers could have a considerable impact on the outcomes, depending on the analytic or modeling technique used. Outliers in health data could represent actual and critical findings, and deleting them may result in the loss of vital information. An unusually high glucose level, for example, could indicate an untreated diabetes patient. By removing such outliers, important therapeutic insights would be lost. As a result, the ourliers were retained.
+
+```{r outliers}
+# Numeric columns to check for outliers
+continuous_vars <- colnames(select_if(encoded_df, is.numeric))
+
+# List to store plots
+plots <- list()
+
+# Generate boxplots for each variable
+for(i in 1:length(continuous_vars)) {
+  p <- ggplot(encoded_df, aes_string(y = continuous_vars[i])) + 
+    geom_boxplot() +
+    scale_fill_viridis_d() +
+    ggtitle(continuous_vars[i]) +
+    theme_minimal()
+  plots[[i]] <- p
+}
+
+# Arrange the plots in a grid
+grid.arrange(grobs = plots, ncol = 3)
+```
+
+
+### 1.6 Summary Statistics for transformed data
+
+After the data transformation, no missing values detected.
+
+New columns were added (`male, prevalStroke, stroke, BP, postgraduate, primaryschool, uneducated`) while other were removed (`Gender, education, Heart_stroke, prevalentStroke`).
+
+The mean for `cigsPerDay` had been reduced in the converted data because missing values were imputed using the median. `totChol, sysBP, diaBP, BMI, heartRate, and glucose`: These columns' statistics changed slightly, owing to imputation of missing values with medians.
+
+```{r head_data_new}
+DT::datatable(
+      encoded_df[1:25,],
+      extensions = c('Scroller'),
+      options = list(scrollY = 350,
+                     scrollX = 500,
+                     deferRender = TRUE,
+                     scroller = TRUE,
+                     dom = 'lBfrtip',
+                     fixedColumns = TRUE, 
+                     searching = FALSE), 
+      rownames = FALSE) 
+```
+
+```{r summ_new}
+print(dfSummary(encoded_df, text.graph.col = FALSE, graph.col = FALSE, style = "grid", valid.col = FALSE), headings = FALSE, max.tbl.height = 500, footnote = NA, col.width=50, method="render")
+```
+
+
+## 2. Data Exploration
+
+### 2.1 Continuous Variables
+First, we checked the distribution of all continuous variables with the most patients between the ages of 40 to 60.. 
+
+`Age` appeared to be rather evenly distributed, with a small left skew.
+
+The distribution of `cigsPerDay` showed that the majority of people either did not smoke or smoked around 20 cigarettes per day.
+
+`totChol`,`sysBP`, `Glucose` and `diaBP` were slightly skewed to the right, with most values centered around 200-300 mg/dL, 120 mmHg, 80 mmHg and 100 mg/d respectively.
+
+`BMI` was tilted to the right, with the majority of readings falling between 20 and 30.
+The `heart rate` appeared to be rather normal, ranging between 70 and 80 beats per minute.
+`BP` was slightly biased to the right as well, with most values around 1.5.
+
+```{r cont_plot}
+# Choose numeric variables
+numeric_vars <-colnames(select_if(encoded_df, is.numeric))
+
+# List to store plots
+plots <- list()
+
+# Generate histograms for each variable
+for (i in 1:length(numeric_vars)) {
+  p <- ggplot(encoded_df, aes_string(x = numeric_vars[i])) + 
+    geom_histogram(aes(y=..density..), bins = 30, fill = "lightgreen", color = "black", alpha = 0.7) +
+    geom_density(alpha = 0.2, fill = "#FF6666") +
+    ggtitle(paste0('Distribution of ', numeric_vars[i])) +
+    theme_minimal()
+  plots[[i]] <- p
+}
+
+# Plot in grid with 3 columns
+grid.arrange(grobs = plots, ncol = 3)
+```
+
+
+
+### 2.2 Categorical Variables
+
+Next, we explored the distribution of all categorical variables. 
+
+The number of current smokers and nonsmokers was nearly equal, with nonsmokers somewhat more common. The majority of people didn't take blood pressure medicine (`BPMeds`). Although most people did not have prevalent hypertension, a considerable proportion did. `Diabetes` affected a small percentage of the population.
+
+The dataset had more females than males. A relatively small percentage of people had suffered a previous stroke. In terms of education, only a few people had a postgraduate education, a small percentage of people had only completed primary school, the majority of people were uneducated.
+prevalentStroke_yes: 
+
+The majority of people had never had a heart attack. The target variable had a large class imbalance in this distribution. Such imbalances could make modeling difficult since models could become biased toward anticipating the majority class. It was critical to keep this in mind while creating and evaluating models, and to think about tactics like resampling or utilizing specific assessment criteria.
+
+```{r factor_plot}
+# Choose factor variables
+factor_vars <- encoded_df %>% select_if(is.factor) %>% colnames()
+
+# List to store plots
+plots <- list()
+
+# Generate barplots for each variable
+for (i in 1:length(factor_vars)) {
+  p <- ggplot(encoded_df, aes_string(x = factor_vars[i])) + 
+    geom_bar(fill = "lightgreen", color = "black", alpha = 0.7) +
+    ggtitle(paste0('Distribution of ', factor_vars[i])) +
+    theme_minimal()
+  plots[[i]] <- p
+}
+
+# Plot in grid with 3 columns
+grid.arrange(grobs = plots, ncol = 3)
+```
+
+
+### 2.3 Target variable vs numeric variables 
+
+To better understand the relationships between the variables and target, we started with boxplots: numeric variables vs target.
+
+Patients who had had a heart attack were usually older. There did not appear to be a significant difference between the two groups in the number of cigarettes smoked each day. 
+Those who had had a heart attack had a slightly higher median total cholesterol level.
+
+
+Patients who had a heart attack had greater systolic blood pressure and diastolic blood pressure. As a result, those who had had a heart attack had a slightly higher systolic to diastolic blood pressure ratio.
+The distribution of Body Mass Index appeared to be similar in both groups.
+There was no discernible difference in heart rate between the two groups.
+Glucose levels appeared to be higher in persons who had had a heart attack.
+
+
+The visualizations revealed which characteristics could be major predictors of the occurrence of heart attacks. It was important to note, however, that correlation did not imply causality. However, the plots confirmed the general knowledge that people with a stroke were older than 45 years, had not had healthy lifestyle and had problems with blood pressure.
+
+```{r numeric_target_plot}
+# List to store plots
+plots <- list()
+
+# Generate boxplots for each numeric variable vs target
+for (i in 1:length(numeric_vars)) {
+  p <- ggplot(encoded_df, aes_string(x = 'stroke', y = numeric_vars [i])) + 
+    geom_boxplot(fill = "lightgreen") +
+    ggtitle(paste0(numeric_vars [i], ' vs stroke')) +
+    theme_minimal()
+  plots[[i]] <- p
+}
+
+# Plot in grid with 3 columns
+grid.arrange(grobs = plots, ncol = 3)
+```
+
+
+### 2.4 Target variable vs categorical variables
+
+Next, we checked the distribution of categorical variables vs target variable.
+
+Males and females appeared to experience an equal proportion of cardiac strokes. The proportion of heart strokes was generally consistent across education levels. People who have had a prevalent stroke had a slightly greater risk of having a heart attack. The proportion of cardiac strokes was comparable between smokers and nonsmokers which was unusual.
+
+Patients with prevalent hypertension and who used blood pressure drugs had an increased risk of having a heart attack.
+The proportion of people who have a heart attack was higher in diabetics.
+
+These plots confirmed the general knowledge about the reasons for stroke.
+
+```{r factor_target_plot}
+# Define the categorical variables without the target
+factor_vars_no_target <- setdiff(factor_vars, 'stroke')
+
+# List to store plots
+plots <- list()
+
+# Generate bar plots for each factor variable vs target
+for (i in 1:length(factor_vars_no_target)) {
+  p <- ggplot(encoded_df, aes_string(x = factor_vars_no_target[i], fill = 'stroke')) + 
+    geom_bar(position = "dodge") +
+    ggtitle(paste0('Stroke vs ', factor_vars_no_target[i])) +
+    theme_minimal()
+  plots[[i]] <- p
+}
+
+# Plot in grid with 3 columns
+grid.arrange(grobs = plots, ncol = 3)
+```
+
+
+### 2.5 Correlation
+
+To understand the relationships between features, we built the correlation matrix.
+
+`Age` had a positive association with `sysBP, diaBP, and totChol`, showing that as people got older, their blood pressure and cholesterol levels rose. `CigsPerDay` had no significant relationships with any other variables which was unusual, the general knowledge connects smoking with heart diseases.
+
+`sysBP and diaBP` were substantially positively associated as they both assessed blood pressure.
+As a result, the systolic to diastolic blood pressure ratio had a high positive association with sysBP and a strong negative correlation with diaBP. 
+Other correlations were modest, indicating that there were just a few linear associations between those variables.
+
+
+```{r corr}
+# Check correlation
+rcore <- rcorr(as.matrix(encoded_df %>% dplyr::select(where(is.numeric))))
+# Take correlation coeff
+coeff <- rcore$r
+# Build corr plot
+corrplot(coeff, tl.cex = .7, tl.col="black", method = 'color', addCoef.col = "black",
+         type="upper", order="hclust",
+         diag=FALSE)
+```
+
+
+## 3. Split data
+
+Finally, we split our data into train (75%) and test (25%) datasets to evaluate model performance before we proceeded to prediction. The train data contained 3179 records, test data 1059.
+
+The response variable had a balance of 85% for `0` response and 15% for `1` response. For the further analysis, it could be an option to try balance the response variable.
+
+```{r split}
+# random seed
+set.seed(42)
+
+# 80/20 split of the data set
+sample <- sample.split(encoded_df$stroke, SplitRatio = 0.75)
+train_data  <- subset(encoded_df, sample == TRUE)
+test_data   <- subset(encoded_df, sample == FALSE)
+
+# Check dimensions of train and test data
+dim(train_data)
+dim(test_data)
+
+# Check class distribution of original, train, and test sets
+round(prop.table(table(dplyr::select(encoded_df, stroke), exclude = NULL)), 4) * 100
+round(prop.table(table(dplyr::select(train_data, stroke), exclude = NULL)), 4) * 100
+round(prop.table(table(dplyr::select(test_data, stroke), exclude = NULL)), 4) * 100
+```
+
+The training data was normalized in the procedure outlined by modifying each feature's range to fall between 0 and 1, preventing bias from different scales and ensuring that each feature contributed equally to the model. For algorithms like SVM that are sensitive to the amount of data, this step is essential. The test data underwent a similar transformation after the training data had been normalized. To preserve consistency and model validity when making predictions on fresh, untested data, the transformation parameters from the training data should normally be applied to the test data. Better performance and more accurate predictions result from normalizing the SVM model to operate under the assumption that all features have the same scale.
+
+```{r norm}
+# Pre-processing transformation, "range" scales the data to the interval [0, 1]
+data.pre <- preProcess(train_data, method="range")
+train_data <- predict(data.pre, train_data)
+test_data <- predict(data.pre, test_data)
+```
+
+With imbalanced data, most machine learning models predicted the majority class more efficiently than the minority class. To address this behavior, we utilized SMOTE() function the data in order to achieve higher accuracy rates between classes. The SMOTE function oversampled the minority class by using bootstrapping and k-nearest neighbor to synthetically create additional observations of that event. We tried to run models with imbalanced data and without.
+```{r smote}
+# random seed
+set.seed(42)
+
+# Fix imbalance
+train_data_smote <- as.data.frame(train_data)
+train_data_smote$stroke <- as.factor(train_data_smote$stroke)
+train_data_smote <- DMwR::SMOTE(stroke ~ ., train_data_smote, perc.over = 100, perc.under=200)
+
+round(prop.table(table(dplyr::select(train_data_smote, stroke), exclude = NULL)), 4) * 100
+```
+
+
+## 4. SVM Model
+
+The purpose of the Support Vector Machine (SVM) model was to predict the likelihood of stroke in patients; a prediction of `1` denoted the presence of a stroke, while a prediction of `0` denoted its absence. In building the model, the SVM was trained with a linear kernel to identify the hyperplane that best divides the feature space into classes denoting outcomes that resulted in a stroke and those that did not.
+
+A 10-fold cross-validation technique was used to fine-tune the parameters in order to identify the ideal cost parameter, which managed the trade-off between minimizing the complexity of the model and obtaining a low error on the training set. A moderate level of penalty for misclassified points was found to be optimal for this model, as evidenced by the best performance observed at a cost of 5, when the cost parameter was varied across a range of values (0.001, 0.01, 0.1, 1, 5, 10, 100).
+
+```{r svm_model}
+tune.out=tune(svm, stroke ~ . -sysBP -diaBP, data = train_data_smote, kernel = "linear", type = 'C-classification', scale=FALSE,
+              ranges =list(cost=c(0.001,0.01,0.1, 1,5,10,100)))
+
+summary(tune.out)
+bestmod <- tune.out$best.model
+summary(bestmod)
+```
+
+An independent test set was used to assess the model's performance, and the findings were as follows:
+
+- `Accuracy`: 0.7, meaning that for roughly two thirds of the patients in the test set, the model accurately predicted their stroke status.
+
+- `Sensitivity`: 0.71, indicating that the model was able to accurately identify patients who were not stroke victims.
+
+- `Specificity`: 0.62, which showed that the model could correctly identify stroke patients.
+
+- `Precision`: 0.91, showed that almost all of the patients the model predicted would not have a stroke actually did not.
+
+- `F1 Score`: 0.8; indicated that the model was not fully capturing the class 1 (patients with stroke). This score strikes a balance between sensitivity and precision.
+
+- `ROC`: 0.67% for the area under the ROC curve (AUC) suggested that the model had a moderate ability to distinguish between positive and negative classes.
+
+```{r svm_predict}
+# Predicting the Test set results 
+y_pred2 <- predict(bestmod, newdata = test_data)
+
+
+# Evaluate Decision tree
+conf_matrix2 <- confusionMatrix(y_pred2, test_data$stroke) #positive = '1'
+
+results <- tibble(Model = "SVM Model", Accuracy=conf_matrix2$overall[1], 
+                  "Classification error rate" = 1 - conf_matrix2$overall[1],
+                  F1 = conf_matrix2$byClass[7],
+                  Sensitivity = conf_matrix2$byClass["Sensitivity"],
+                  Specificity = conf_matrix2$byClass["Specificity"],
+                  Precision =  conf_matrix2$byClass["Precision"],
+                  ROC = auc(roc(test_data$stroke, factor(y_pred2, ordered = TRUE))))
+
+
+conf_matrix2
+```
+
+
+## 5. Model selection
+
+The SVM model showed a respectable level of accuracy (0.7) and the capacity to recognize stroke-risk patients; however, the precision was 0.9 for positive class 0, which could result in fewer false alarms for non-stroke patients. In medical situations where there is a high cost of missing a stroke, this might be justified and further research is necessary to rule out any false positives. To raise accuracy and the model's overall predictive performance, more tinkering, the addition of more discriminative features, or the use of different modeling strategies might be required.
+
+When compared to the SVM and Random Forest models, the Decision Trees performed worse on most metrics. We didn't take Decision trees into the further consideration.
+
+Due to the work process, several techniques were used: normalization, adding new features, different balance techniques. These steps didn't improve the models' performance.
+
+Based on its highest accuracy (0.72) and F1 score (0.82 compared to 0.8 for SVM), the Random Forest model seemed to be the most reliable one. Its specificity was not as high as the SVM's (0.56 for RF, 0.62 for SVM), but it still had the highest sensitivity (0.75 compared to 0.71 for SVM). The SVM Model was especially good at correctly identifying true stroke cases, as it exhibited the highest specificity. The AUC-ROC for the Random Forest model was at 0.65, which was lower than the SVM model's 0.67. Although the difference was slight, it suggests that the SVM model could have a slightly better capability in distinguishing between two classes. The sensitivity of both models was relatively high. This suggests a similar capacity to recognize real-world non-stroke cases accurately. The initial imbalance in the target variable may be reflected in the lower specificity. Also, when working with these algorithms, we need to understand our computational abilities. Random Forests can be more memory-intensive due to their ensemble of trees, but SVMs can be computationally intensive, particularly when working with large datasets. In my case, SVM was the choice.
+
+There were also a class imbalance in the article [[1](https://doi.org/10.1155/2021/5550344)], and the results were the same as our work. It investigates the application of Decision Tree Ensembles to predict coronavirus disease 2019. Based on the results of the work, the standard decision tree ensembles (which were used in the previous homework) were not as effective as decision tree ensembles designed for imbalanced datasets. Classifiers designed for imbalanced datasets should be applied if the data is unbalanced. 
+
+The ideal model to choose would depend on the particular requirements of our application. Because of its greater sensitivity, the Random Forest model could be better if the objective was to reduce false negatives, or the number of cases where a stroke was not detected.  The work [[2](https://doi.org/10.1016/B978-0-12-824536-1.00014-9)] showed that SVM performed better than Random Forest on the COVID-19 data. The article [[3](https://doi.org/10.1186/s12911-019-1004-8)] summarized 48 articles, each one used multiple supervised machine learning algorithm variations to predict a single disease. It has been noted that SVM has been applied the most. Despite being ranked second least frequently, RF revealed the highest percentage (i.e., 53%) of superior accuracy, followed by SVM (i.e., 41%). It's interesting to note that, despite consistently demonstrating better accuracy for heart disease, diabetes, and Parkinson's disease, SVM was found to exhibit superior performance the least amount of the time. It has been discovered that SVM consistently exhibits higher accuracy in articles utilizing 5- and 10-fold validation methods (five and three times, respectively). Articles [[4](https://pubmed.ncbi.nlm.nih.gov/27752272/)], [[5](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC2655823/)] had the same outcome  when comparing SVM and Random Forest algorithms when predicting metabolic syndrome and microarray-based cancer respectively. Generally speaking, SVMs outperform RFs in terms of classification performance.
+
+
+
+
+```{r compare_table}
+trees_result <- tibble::tribble(
+                      ~Model, ~Accuracy, ~"Classification error rate",   ~F1, ~Sensitivity, ~Specificity, ~Precision,      ~ROC,
+  "Decision Tree - 1",     0.661,                      0.339, 0.773,        0.679,        0.559,      0.896, 0.6191468,
+  "Decision Tree - 2",     0.681,                      0.319, 0.789,        0.705,        0.547,      0.897, 0.6257418,
+  "Random Forest",     0.719,                      0.281, 0.818,        0.747,        0.559,      0.904, 0.6531111
+  )
+
+compare_results <- rbind(results, trees_result)
+
+nice_table <- function(df, cap=NULL, cols=NULL, dig=3, fw=F){
+  if (is.null(cols)) {c <- colnames(df)} else {c <- cols}
+  table <- df %>% 
+    kable(caption=cap, col.names=c, digits=dig) %>% 
+    kable_styling(
+      bootstrap_options = c("striped", "hover", "condensed"),
+      html_font = 'monospace',
+      full_width = fw)
+  return(table)
+}
+
+compare_results %>% 
+  nice_table(cap='Model Comparison') 
+```
+
+
+## 6. Conclusion
+
+The Random Forest model is a good option for stroke prediction because it seems to be the most reliable in terms of accuracy, sensitivity, and F1 score. But it's crucial to take into account the trade-offs between SVM and Random Forest. The SVM model performs well in precision and ROC, demonstrating its strength in reducing false positives, while Random Forest offers higher sensitivity, making it proficient at identifying no-stroke cases. This distinction is especially important in the medical setting, where there can be substantial differences in the costs and implications of false positives (erroneously diagnosing a stroke) versus false negatives (missing a stroke). The superior precision of the SVM model suggests that it may be better suited for datasets where the negative class (stroke cases) is less common but still crucial to accurately detect when addressing the problem of class imbalance, which is common in stroke prediction. However, despite the possibility of more false positives, Random Forest's higher sensitivity may make it more useful in situations where finding as many no-stroke cases as possible is the main goal. Despite performing worse on these metrics, decision trees may be favored due to their ease of use and readability. In comparison to individual decision trees, the Random Forest ensembled approach is well-known for managing intricate, non-linear relationships in data and is generally less prone to overfitting. Datasets with a combination of numerical and categorical features work well with it. In contrast, the SVM model is robust and works well in high-dimensional spaces, particularly when there is a distinct margin of separation between classes. The particular requirements of the stroke prediction task would determine which of Random Forest and SVM to use. Even though Random Forest provides a higher F1-score and accuracy, it's crucial to take the model's interpretability into account. Because SVM is frequently simpler, it may provide greater transparency into the decision-making process, which is beneficial for comprehending and relying on the model's predictions in medical settings. As discussed in the provided articles, SVM would be a better choice for the heart stroke prediction in this particular scenario due to its better capability in distinguishing between two classes (as the work above showed) and as it is used more often in healthcare in general based on the provided articles.
+
+
+
+## References
+
+1. Ahmad, A., Safi, O., Malebary, S. J., Alesawi, S., & Alkayal, E. S. (2021). Decision Tree Ensembles to Predict Coronavirus Disease 2019 Infection: A Comparative study. Complexity, 2021, 1–8. https://doi.org/10.1155/2021/5550344
+
+2. Guhathakurata, S., Kundu, S., Chakraborty, A., & Banerjee, J. S. (2021). A novel approach to predict COVID-19 using support vector machine. Data Science for COVID-19, 351–364. https://doi.org/10.1016/B978-0-12-824536-1.00014-9
+
+3. Uddin, S., Khan, A., Hossain, M. E., & Moni, M. A. (2019). Comparing different supervised machine learning algorithms for disease prediction. BMC medical informatics and decision making, 19(1), 281. https://doi.org/10.1186/s12911-019-1004-8
+
+4. Karimi-Alavijeh, F., Jalili, S., & Sadeghi, M. (2016). Predicting metabolic syndrome using decision tree and support vector machine methods. ARYA atherosclerosis, 12(3), 146–152. https://pubmed.ncbi.nlm.nih.gov/27752272/
+
+5. Statnikov, A., & Aliferis, C. F. (2007). Are random forests better than support vector machines for microarray-based cancer classification?. Annual Symposium proceedings. AMIA Symposium, 2007, 686–690. https://www.ncbi.nlm.nih.gov/pmc/articles/PMC2655823/
+
+6. Huh, K. (2021, February 13). Surviving in a random forest with imbalanced datasets. Medium. https://medium.com/sfu-cspmp/surviving-in-a-random-forest-with-imbalanced-datasets-b98b963d52eb 
+
+7. Nwanganga, F., & Chapple, M. (2020). _Practical Machine Learning in R._ https://doi.org/10.1002/9781119591542
+
+8. Mirza_Hasnine. (2023, March 11). Heart disease dataset. Kaggle. https://www.kaggle.com/datasets/mirzahasnine/heart-disease-dataset/data 
+
+
+
+## Essay. Decision trees vs SVMs  for Stroke Data
+
+The work below shows the stages from data preparation to model selection for the heart disease data from the source: 
+https://www.kaggle.com/datasets/mirzahasnine/heart-disease-dataset/data 
+
+The first step was data preparation, which began with datasets of 4,238 records and 17 predictor variables. Each record represented a patient, and each column represented a health aspect. The `Heart_ stroke` was the target, it specified whether or not the patient experienced a stroke. There was a new variable added (BP - blood pressure ratio) from sysBP and diaBP, which reduced the dataset by removing unnecessary columns. The data transformation process included: addressing missing values, and categorical variable encoding (Gender, Heart_stroke,'prevalentStroke, education) resulting in a clean dataset for modeling. The resulting dataset consisted of 4,238 observations and 19 variables.
+
+We discovered that the age bracket '50-59' was the most represented in our sample using histograms, presumably indicating a vulnerable sector. Box plots revealed a clear relationship between glucose level and stroke outcomes, implying that greater glucose levels may be a risk factor. The correlation matrix demonstrated a significant relationship between sysBP and diaBP, implying multicollinearity. Furthermore, our investigation into smoking status revealed that the vast majority had never smoked, and a pie chart of the stroke variable revealed an 85%-15% data discrepancy. These findings from our data exploration phase were critical in laying the groundwork for the upcoming modeling processes.
+
+The dataset was divided into training (75%) and testing (25%) datasets to evaluate model performance before we proceeded to prediction. The train data contained 3179 records, test data 1059. The training data was normalized in the procedure outlined by modifying each feature's range to fall between 0 and 1, preventing bias from different scales and ensuring that each feature contributed equally to the model. For algorithms like SVM that are sensitive to the amount of data, this step is essential. The test data underwent a similar transformation after the training data had been normalized. To preserve consistency and model validity when making predictions on fresh, untested data, the transformation parameters from the training data should normally be applied to the test data. Better performance and more accurate predictions result from normalizing the SVM model to operate under the assumption that all features have the same scale. The response variable had a balance of 85% for `0` response and 15% for `1` response. To address this behavior, we utilized SMOTE() function the data in order to achieve higher accuracy rates between classes. The SMOTE function oversampled the minority class by using bootstrapping and k-nearest neighbor to synthetically create additional observations of that event. We tried to run models with imbalanced data and without. 
+
+
+**Support Vector Machine Model**: the SVM was trained with a linear kernel to identify the hyperplane that best divides the feature space into classes denoting outcomes that resulted in a stroke and those that did not.
+
+A 10-fold cross-validation technique was used to fine-tune the parameters in order to identify the ideal cost parameter, which managed the trade-off between minimizing the complexity of the model and obtaining a low error on the training set. A moderate level of penalty for misclassified points was found to be optimal for this model, as evidenced by the best performance observed at a cost of 5, when the cost parameter was varied across a range of values (0.001, 0.01, 0.1, 1, 5, 10, 100). `Accuracy` was 0.7, meaning that for roughly two thirds of the patients in the test set, the model accurately predicted their stroke status. `Sensitivity`: 0.71, indicating that the model was able to accurately identify patients who were not stroke victims. `Specificity`: 0.62, which showed that the model could correctly identify stroke patients. `Precision`: 0.91, showed that almost all of the patients the model predicted would not have a stroke actually did not. `F1 Score`: 0.8; indicated that the model was not fully capturing the class 1 (patients with stroke). This score strikes a balance between sensitivity and precision. `ROC`: 0.67% for the area under the ROC curve (AUC) suggested that the model had a moderate ability to distinguish between positive and negative classes.
+
+
+
+**Model selection**: The SVM model showed a respectable level of accuracy (0.7) and the capacity to recognize stroke-risk patients; however, the precision was 0.9 for positive class 0, which could result in fewer false alarms for non-stroke patients. In medical situations where there is a high cost of missing a stroke, this might be justified and further research is necessary to rule out any false positives. To raise accuracy and the model's overall predictive performance, more tinkering, the addition of more discriminative features, or the use of different modeling strategies might be required.
+
+When compared to the SVM and Random Forest models, the Decision Trees performed worse on most metrics. We didn't take Decision trees into the further consideration.
+
+Due to the work process, several techniques were used: normalization, adding new features, different balance techniques. These steps didn't improve the models' performance.
+
+Based on its highest accuracy (0.72) and F1 score (0.82 compared to 0.8 for SVM), the Random Forest model seemed to be the most reliable one. Its specificity was not as high as the SVM's (0.56 for RF, 0.62 for SVM), but it still had the highest sensitivity (0.75 compared to 0.71 for SVM). The SVM Model was especially good at correctly identifying true stroke cases, as it exhibited the highest specificity. The AUC-ROC for the Random Forest model was at 0.65, which was lower than the SVM model's 0.67. Although the difference was slight, it suggests that the SVM model could have a slightly better capability in distinguishing between two classes. The sensitivity of both models was relatively high. This suggests a similar capacity to recognize real-world non-stroke cases accurately. The initial imbalance in the target variable may be reflected in the lower specificity. Also, when working with these algorithms, we need to understand our computational abilities. Random Forests can be more memory-intensive due to their ensemble of trees, but SVMs can be computationally intensive, particularly when working with large datasets. In my case, SVM was the choice.
+
+There were also a class imbalance in the article [[1](https://doi.org/10.1155/2021/5550344)], and the results were the same as our work. It investigates the application of Decision Tree Ensembles to predict coronavirus disease 2019. Based on the results of the work, the standard decision tree ensembles (which were used in the previous homework) were not as effective as decision tree ensembles designed for imbalanced datasets. Classifiers designed for imbalanced datasets should be applied if the data is unbalanced. 
+
+The ideal model to choose would depend on the particular requirements of our application. Because of its greater sensitivity, the Random Forest model could be better if the objective was to reduce false negatives, or the number of cases where a stroke was not detected.  The work [[2](https://doi.org/10.1016/B978-0-12-824536-1.00014-9)] showed that SVM performed better than Random Forest on the COVID-19 data. The article [[3](https://doi.org/10.1186/s12911-019-1004-8)] summarized 48 articles, each one used multiple supervised machine learning algorithm variations to predict a single disease. It has been noted that SVM has been applied the most. Despite being ranked second least frequently, RF revealed the highest percentage (i.e., 53%) of superior accuracy, followed by SVM (i.e., 41%). It's interesting to note that, despite consistently demonstrating better accuracy for heart disease, diabetes, and Parkinson's disease, SVM was found to exhibit superior performance the least amount of the time. It has been discovered that SVM consistently exhibits higher accuracy in articles utilizing 5- and 10-fold validation methods (five and three times, respectively). Articles [[4](https://pubmed.ncbi.nlm.nih.gov/27752272/)], [[5](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC2655823/)] had the same outcome  when comparing SVM and Random Forest algorithms when predicting metabolic syndrome and microarray-based cancer respectively. Generally speaking, SVMs outperform RFs in terms of classification performance
+
+
+**Conclusion**: The Random Forest model is a good option for stroke prediction because it seems to be the most reliable in terms of accuracy, sensitivity, and F1 score. But it's crucial to take into account the trade-offs between SVM and Random Forest. The SVM model performs well in precision and ROC, demonstrating its strength in reducing false positives, while Random Forest offers higher sensitivity, making it proficient at identifying no-stroke cases. This distinction is especially important in the medical setting, where there can be substantial differences in the costs and implications of false positives (erroneously diagnosing a stroke) versus false negatives (missing a stroke). The superior precision of the SVM model suggests that it may be better suited for datasets where the negative class (stroke cases) is less common but still crucial to accurately detect when addressing the problem of class imbalance, which is common in stroke prediction. However, despite the possibility of more false positives, Random Forest's higher sensitivity may make it more useful in situations where finding as many no-stroke cases as possible is the main goal. Despite performing worse on these metrics, decision trees may be favored due to their ease of use and readability. In comparison to individual decision trees, the Random Forest ensembled approach is well-known for managing intricate, non-linear relationships in data and is generally less prone to overfitting. Datasets with a combination of numerical and categorical features work well with it. In contrast, the SVM model is robust and works well in high-dimensional spaces, particularly when there is a distinct margin of separation between classes. The particular requirements of the stroke prediction task would determine which of Random Forest and SVM to use. Even though Random Forest provides a higher F1-score and accuracy, it's crucial to take the model's interpretability into account. Because SVM is frequently simpler, it may provide greater transparency into the decision-making process, which is beneficial for comprehending and relying on the model's predictions in medical settings. As discussed in the provided articles, SVM would be a better choice for the heart stroke prediction in this particular scenario due to its better capability in distinguishing between two classes (as the work above showed) and as it is used more often in healthcare in general based on the provided articles.
+
+
+**Questions**
+
+`1) Which algorithm is recommended to get more accurate results?`
+
+For results with higher overall accuracy and F1 score, Random Forest is advised. This model is especially good at classifying cases where there has been no stroke because of its higher sensitivity. But because of its higher ROC and precision, the SVM model performs better at reducing false positives — a critical component of medical diagnostics.
+
+`2) Is it better for classification or regression scenarios?`
+
+The context of the stroke prediction task is one of classification scenarios, where both Random Forest and SVM are commonly employed. Both algorithms can be modified for regression, but in this case, their advantages are in classification, particularly when dealing with binary outcomes such as stroke/no-stroke.
+
+`3) Do you agree with the recommendations?`
+
+It seems reasonable to favor SVM in light of the stroke prediction context and the factors highlighted in the analysis above. The SVM model is especially useful in medical diagnostics, where it is necessary to minimize the cost of false positives, or the incorrect prediction of stroke, due to its higher precision and superior ROC score. Based on the provided articles, it is commonly used in healthcare settings.
+
+`4) Why`
+
+SVM's high precision suggests fewer false positives, which is important for diagnosing strokes because misdiagnosed treatments based on false alarms can have serious consequences. Better discriminative ability between the two classes (stroke and no stroke) is suggested by its higher ROC score, which is crucial for an accurate diagnosis. The extensive use of SVM in this field, as demonstrated by the cited studies, points to its efficacy and dependability in this area. Its suitability for medical applications is further supported by the articles' observations about its consistent performance across a range of diseases. SVMs are also robust in high-dimensional spaces and effective when there is a distinct margin of separation between classes. As a result, the performance of SVM has been validated in a number of studies, including those that used various cross-validation techniques. This highlights the flexibility and dependability of SVM in a variety of scenarios, including datasets that are imbalanced. In conclusion, Random Forest performs well as well, but SVM is better suited for stroke prediction tasks where diagnosis accuracy is crucial due to its unique features, especially its precision and capacity to effectively distinguish between classes.
+
+
+
