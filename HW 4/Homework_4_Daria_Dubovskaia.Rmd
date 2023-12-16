@@ -18,7 +18,10 @@ knitr::opts_chunk$set(eval=TRUE, message=FALSE, warning=FALSE, fig.height=5, fig
 
 # libraries
 library(partykit)
+library(lmtest)
 library(kableExtra)
+library(tsoutliers)
+library(tseries)
 library(ranger)
 library(viridis)
 library(tidyverse)
@@ -69,27 +72,6 @@ nice_table <- function(df, cap=NULL, cols=NULL, dig=3, fw=F){
   return(table)
 }
 
-#' glmnet_cv_aicc
-#'
-#' @param fit
-#' @param lambda
-#'
-#' @return
-#' @export
-#'
-#' @examples
-glmnet_cv_aicc <- function(fit, lambda = 'lambda.min'){
-  whlm <- which(fit$lambda == fit[[lambda]])
-  with(fit$glmnet.fit,
-       {
-         tLL <- nulldev - nulldev * (1 - dev.ratio)[whlm]
-         k <- df[whlm]
-         n <- nobs
-         return(list('AICc' = - tLL + 2 * k + 2 * k * (k + 1) / (n - k - 1),
-                     'BIC' = log(n) * k - tLL))
-       })
-}
-
 #' coeff2dt
 #'
 #' @param fitobject 
@@ -115,8 +97,6 @@ The real estate market is a dynamic and intricate setting where a variety of fac
 We started by carefully reviewing the dataset to find problems like outliers, missing values, and possible predictor multicollinearity. This procedure, which was essential for guaranteeing the accuracy of our analysis, resulted in preprocessing and data cleaning, where we took care of these problems. We used Lasso Regression and Linear Regression models for our analysis after the data were prepared. These models were selected because they are well-suited to comprehending how different features affect the dependent variable, which in this case is the cost of Airbnb listings. Given its popularity for being easily understood and straightforward, Linear Regression gave us a starting point model. However, by penalizing less significant features, Lasso Regression's feature selection capability allowed us to better understand the most significant predictors.
 
 
-------------------------------------------------------------------------
-
 ## 1. Data Preparation
 
 ```{r data_load}
@@ -128,7 +108,7 @@ data <- read.csv("https://raw.githubusercontent.com/ex-pr/DATA_622/main/HW%204/n
 
 The dataset contained **38,792** observations of 18 variables.
 
-The information was listings for New York City from October, 2023, and each record includes information about a single rental property, such as its type, location, cost, and review-related details.
+The information was listings for New York City from October, 2023, and each record included information about a single rental property, such as its type, location, cost, and review-related details.
 The `price` was the target, it specified the price of a Airbnb listing per night.
 Specifically:
 
@@ -167,7 +147,7 @@ Every subset served as the test set once during the k repetitions of this proces
 In order to prevent overfitting and underfitting, it made sure that each observation from the original dataset had an equal chance of showing up in the training and test sets.
 
 The target variable's nature as a quantitative measure, price, influenced the choice of these algorithms.
-For modeling the relationship between the predictors and a continuous outcome, linear and lasso regression were preferred due to their simplicity and effectiveness.
+For modeling the relationship between the predictors and a continuous outcome, linear and Lasso Regression were preferred due to their simplicity and effectiveness.
 However, multicollinearity and irrelevant features could affect the performance of lasso and linear regression; this was where feature selection and regularization techniques came into play.
 Reliability in validating model performance across dataset subsets had be aided by k-fold cross validation.
 
@@ -188,7 +168,7 @@ DT::datatable(
       rownames = FALSE) 
 ```
 
-The table below provided a a summary statistics of the New York City listings market for 2023, highlighting variations in listing prices, booking requirements, and guest interaction.
+The table below provided a summary statistics of the New York City listings market for 2023, highlighting variations in listing prices, booking requirements, and guest interaction.
 
 The were a small number of missing values (0.01%) in the `host_name` and `name` columns, a sizable amount (26.7%) in the `last_review` and `reviews_per_month` columns, and a very high percentage (92.42%) of missing values in the `license` column.
 Prior to doing additional analysis, these missing values had to be addressed.
@@ -226,9 +206,11 @@ imputed_df$last_review <- as.Date(imputed_df$last_review)
 
 Managing missing values was one of the critical problems to fix before building the models.
 
-The missing values for continuous variable `reviews_per_month` (10,352 rows) were imputed with 0 as it corresponded with 0 `number_of_reviews` (10,352 rows with 0 number of reviews). The missing values for date column `last review` were imputed with the minimum date from the column. Instead of the date format, we counted the amount of days since the earliest review. The NaN values in the `last_review and reviews_per_month` columns all occured for examples where no reviews were given in the first place.
+The missing values for continuous variable `reviews_per_month` (10,352 rows) were imputed with 0 as it corresponded with 0 `number_of_reviews` (10,352 rows with 0 number of reviews). The missing values for date column `last review` were imputed with the minimum date from the column. Instead of the date format, we counted the amount of days since the earliest review. The NaN values in the `last_review and reviews_per_month` columns all occurred for examples where no reviews were given in the first place.
 
-The rest of the columns with missing values were not useful for the analysis and predictions: `host_name` and `name` columns contained name of the host and listing, column `last_review` contained information about the date of the last review. 
+The dates were first transformed into an ordinal format, and then they were normalized. To achieve this, the ordinal value of the earliest date was subtracted from each and every date in the `last_review` column. The data was normalized so that the earliest date in the dataset corresponded to 0 and all other dates were represented as the number of days since this earliest date by subtracting the ordinal value of the earliest date.
+
+The rest of the columns with missing values were not useful for the analysis and predictions: `host_name` and `name` columns contained name of the host and listing.
 The column `license` showed if a listing had license (according to the law, specific short-term rentals require a license), this column had more than 90% of the missing data and was dropped from the data.
 Columns `id, host_id` were dropped as well.
 Although, they didn't have any missing values, they contained unique identification numbers for each listing and host which were not useful for the further analysis.
@@ -253,7 +235,7 @@ imputed_df <- imputed_df %>%
 
 ```
 
-```{r}
+```{r earliest_review}
 # Find the earliest date
 earliest <- min(imputed_df$last_review, na.rm = TRUE)
 
@@ -261,14 +243,10 @@ earliest <- min(imputed_df$last_review, na.rm = TRUE)
 imputed_df$last_review <- replace_na(imputed_df$last_review, earliest)
 
 # Convert dates to ordinal and subtract the ordinal value of the earliest date
-imputed_df$last_review <- as.integer(as.Date(imputed_df$last_review) - as.Date(earliest))
-
-# Remove last_review column
-imputed_df <- imputed_df %>% 
-              dplyr::select(-c(last_review)) 
+imputed_df$last_review <- as.integer(imputed_df$last_review - as.Date(earliest))
 ```
 
-### 1.3 Encoding, rename colums
+### 1.4 Encoding, rename colums
 
 We assured that our dataset was appropriate for a broader range of algorithms that require numerical input by using one-hot encoding, boosting the potential accuracy and effectiveness of our later analysis.
 
@@ -280,8 +258,7 @@ Each of these columns accepted a binary value, indicating whether the correspond
 Three new columns were created for `neighbourhood_group`: `neighbourhood_group_Bronx, neighbourhood_group_Brooklyn, neighbourhood_group_Manhattan, neighbourhood_group_Queens`.
 Each of these columns accepted a binary value, indicating whether the corresponding neighbourhood group was present (1) or absent (0).
 
-The last category of each original categorical variable was eliminated throughout the encoding procedure to avoid multicollinearity and reduce redundancy (`neighbourhood_group_Staten Island, room_type_Shared room`).
-The original columns were dropped after explanatory analysis.
+The last category of each original categorical variable was eliminated throughout the encoding procedure to avoid multicollinearity and reduce redundancy (`neighbourhood_group_Staten Island, room_type_Shared room`). The original columns were dropped after explanatory analysis.
 
 The column names were fixed to remove space and transform all letters to lowercase using clean_names() function from janitor library.
 
@@ -295,7 +272,7 @@ encoded_df <- imputed_df
 encoded_df <- dummy_cols(encoded_df, select_columns = c('neighbourhood_group', 'room_type')) 
 
 
-
+# Remove last category of 'neighbourhood_group' and 'room_type'
 encoded_df <- encoded_df %>%
            dplyr::select(-c('neighbourhood_group_Staten Island', 'room_type_Shared room')) %>% 
            clean_names()
@@ -315,15 +292,15 @@ encoded_df$availability_ratio <- encoded_df$availability_365 / 365
 ```
 
 
-### 1.4 Outliers
+### 1.5 Outliers
 
 We used boxplots to detect outliers.
 
--   There were notable anomalies for the `price`, with certain listings charging astronomically high costs in contrast to the majority. The outleirs were removed in the log transformed column.
+-   There were notable anomalies for the `price`, with certain listings charging astronomically high costs in contrast to the majority. The outliers were removed (price > $9,500 per night, just 26 observations) and the BoxCox transformation was applied to the train and test data.
 
 -   `minimum_nights` column also displayed anomalies, with certain listings having extraordinarily high minimum nights requirements. As we saw per graph, there were just 6 listings out of 38,792 with minimum number of nights greater than 500. Hosts could set up these high numbers of minimum nights when they didn't want to accept new guests. As a results, these number for minimum nights were not real. We removed them as these wrong numbers could skew the results. 
 
--   `number_of_reviews`, `reviews_per_month`. A small percentage of listings had an unusually high amount of total reviews. Some listings were more popular than others because they received a lot of reviews each month. For example, these listings could represent a hotel, each hotel could have a lot of rooms in one listing for rent. As a result, one listing received a lot of reviews for many rooms inside it. But the number of listings with reviews greater than 700 was just 9 and the number of reviews per month greater than 40 was 3, they were not representative of the typical listings, they were likely to skew your predictive modeling results. This is a common approach when the outliers constitute a very small percentage of the data and are not central to the analysis. Because the linear regression and Lasso regression models are sensitive to the size and distribution of the input features, outliers can significantly affect the performance of these models.
+-   `number_of_reviews`, `reviews_per_month`. A small percentage of listings had an unusually high amount of total reviews. Some listings were more popular than others because they received a lot of reviews each month. For example, these listings could represent a hotel, each hotel could have a lot of rooms in one listing for rent. As a result, one listing received a lot of reviews for many rooms inside it. But the number of listings with reviews greater than 700 was just 9 and the number of reviews per month greater than 40 was 3, they were not representative of the typical listings, they were likely to skew your predictive modeling results. This is a common approach when the outliers constitute a very small percentage of the data and are not central to the analysis. Because the linear regression and Lasso Regression models are sensitive to the size and distribution of the input features, outliers can significantly affect the performance of these models.
 
 -   `calculated_host_listings_count`. Compared to the average host, some hosts had a lot more listings than others. Which could also happen in case some hosts owned multiple property.
 
@@ -331,7 +308,7 @@ We used boxplots to detect outliers.
 
 -   `number_of_reviews_ltm`: Some listings had received a significant amount of reviews in just the past year, comparable to the overall number of reviews. As it was mentioned above, it could be some hotels. The listings with number of reviews for the last 12 months greater than 200 were removed.
 
-If these outliers were not properly addressed, they may represent special cases or mistakes in data entry, which could skew the analysis.
+If these outliers were not properly addressed, they may represent special cases or mistakes in data entry, which could skew the analysis. 50 rows were removed as outliers.
 
 ```{r outliers}
 # Numeric columns to check for outliers
@@ -353,38 +330,23 @@ grid.arrange(grobs = plots, ncol = 3)
 ```
 
 ```{r}
+dim(encoded_df[encoded_df$price  > 9500,])
 dim(encoded_df[encoded_df$minimum_nights  > 500,])
 dim(encoded_df[encoded_df$number_of_reviews  > 700,])
 dim(encoded_df[encoded_df$reviews_per_month  > 40,])
 dim(encoded_df[encoded_df$number_of_reviews_ltm  > 200,])
 
 encoded_df <- encoded_df %>%
-         filter(minimum_nights <= 500 & number_of_reviews  <= 700 & reviews_per_month  <= 40 & number_of_reviews_ltm  <= 200)
+         filter(price <=9500 & minimum_nights <= 500 & number_of_reviews  <= 700 & reviews_per_month  <= 40 & number_of_reviews_ltm  <= 200)
 ```
-
-
-The `price` column had a small number of extremely high values. This skewness was normalized with the aid of a log transformation, which improved the symmetry of the data and made it more suitable for linear models. The outliers were removed to exclude extreme values in the price data.
-
-```{r}
-# log+1 price to fix the skeweness
-encoded_df$log_price <- log1p(encoded_df$price)
-# Filter the data frame where log(1 + price) is less than 8
-encoded_df <- encoded_df[encoded_df$log_price < 8, ]
-
-# Further filter the data frame where log(1 + price) is greater than 3
-encoded_df <- encoded_df[encoded_df$log_price > 3, ]
-
-```
-
-
 
 ### 1.6 Summary Statistics for transformed data
 
 After the data transformation, no missing values detected.
 
-New columns were added (`neighbourhood_group_bronx, neighbourhood_group_brooklyn,  neighbourhood_group_manhattan, neighbourhood_group_queens, room_type_entire_home_apt,    room_type_hotel_room, room_type_private_room, availability_ratio`) while other were removed (`id, name, host_id, host_name, last_review, license, log_price`).
+New columns were added (`neighbourhood_group_bronx, neighbourhood_group_brooklyn,  neighbourhood_group_manhattan, neighbourhood_group_queens, room_type_entire_home_apt,    room_type_hotel_room, room_type_private_room, availability_ratio`) while other were removed (`id, name, host_id, host_name, license`).
 
-Overall, where the outliers had been eliminated, the main changes brought about by filtering were seen in the maximum values of `minimum_nights, number_of_reviews, reviews_per_month, number_of_reviews_ltm, log_price`. Because of this, the means and standard deviations of these variables had somewhat decreased, which had made the data more condensed and probably more appropriate for linear and Lasso regression analysis.
+Overall, where the outliers had been eliminated, the main changes brought about by filtering were seen in the maximum values of `minimum_nights, number_of_reviews, reviews_per_month, number_of_reviews_ltm, price`. Because of this, the means and standard deviations of these variables had somewhat decreased, which had made the data more condensed and probably more appropriate for linear and Lasso Regression analysis.
 
 ```{r head_data_new}
 DT::datatable(
@@ -410,11 +372,11 @@ print(dfSummary(encoded_df, text.graph.col = FALSE, graph.col = FALSE, style = "
 
 ### 2.1 Continuous Variables
 
-`availability_ratio` displayed a distribution that was more variable. While some postings were available all year long, the most of the hosts were not available all the year. Latitude, longitude had a normal distribution, most of the hosts were concetrated in a specific area. Also, log_price had normal distribution after transformation. All other distributions were right-skewed. Severe skewness in predictors or the target variable could be problematic in regression analysis because it could go against the normalcy assumption, particularly in linear regression models. In addition to causing non-linearity and heteroscedasticity (non-constant variance), skewed distributions can also make the model more susceptible to outliers. It was addressed after splitting the data for training and testing.
+`availability_ratio` displayed a distribution that was more variable. While some postings were available all year long, the most of the hosts were not available all the year. Latitude, longitude had a normal distribution, most of the hosts were concetrated in a specific area. All other distributions were right-skewed. Severe skewness in predictors or the target variable could be problematic in regression analysis because it could go against the normalcy assumption, particularly in linear regression models. In addition to causing non-linearity and heteroscedasticity (non-constant variance), skewed distributions can also make the model more susceptible to outliers. We had to apply transformations like the BoxCox and log+1 transformations in the data preparation stage to normalize these variables. It was addressed after splitting the data for training and testing.
 
 ```{r cont_plot}
 # Choose numeric variables
-numeric_vars <-c("log_price", "minimum_nights", "number_of_reviews", "reviews_per_month", "calculated_host_listings_count", "availability_ratio", "number_of_reviews_ltm", "latitude", "longitude")
+numeric_vars <-c("price", "minimum_nights", "number_of_reviews", "reviews_per_month", "calculated_host_listings_count", "availability_ratio", "number_of_reviews_ltm", "latitude", "longitude")
 
 # List to store plots
 plots <- list()
@@ -504,6 +466,7 @@ Popular neighborhoods that draw a varied range of visitors included those with c
 
 
 ```{r neigh_count}
+# Group by neighbourhood, count
 group_neigh <- encoded_df %>% 
   group_by(neighbourhood) %>% 
   count() %>% 
@@ -519,7 +482,7 @@ ggplot(group_neigh[1:10,], aes(x = reorder(neighbourhood, -n), y = n, fill = nei
 
 ### 2.3 Target variable
 
-**Log Price vs Numerical Variables**: Price didn't seem to be strongly correlated with either latitude or longitude. Nonetheless, there were pockets of higher pricing in specific locations, most likely associated with upscale or more well-known neighborhoods. Few listings had a very high minimum night requirement, while the majority of listings had fewer minimum nights. The quantity of required minimum nights and the cost did not exhibit a definite linear relationship. The majority of expensive listings did not require a minimum of one night.
+**Price vs Numerical Variables**: Price didn't seem to be strongly correlated with either latitude or longitude. Nonetheless, there were pockets of higher pricing in specific locations, most likely associated with upscale or more well-known neighborhoods. Few listings had a very high minimum night requirement, while the majority of listings had fewer minimum nights. The quantity of required minimum nights and the cost did not exhibit a definite linear relationship. The majority of expensive listings did not require a minimum of one night.
 
 In general, listings with a large number of reviews were less expensive. This could suggest that listings at lower prices were being booked and reviewed more frequently. The prices of the listings with fewer reviews varied greatly. Listings with more reviews per month typically had lower prices, much like the number of reviews does. Additionally, this plot implied that listings that were reviewed and probably booked more frequently were more reasonably priced.
 
@@ -527,9 +490,11 @@ The price and the quantity of listings a host had were not clearly correlated. P
 The lack of a discernible pattern suggested that price couldn't be strongly correlated with availability. Similar to the total number of reviews, listings with a higher number of recent reviews typically had lower prices. The trend suggested that listings with lower prices could be booked and reviewed more frequently.
 
 ```{r numeric_price}
+numeric_vars <-c("minimum_nights", "number_of_reviews", "reviews_per_month", "calculated_host_listings_count", "availability_ratio", "number_of_reviews_ltm", "latitude", "longitude")
+
 # Plot target vs numeric columns
 for (i in numeric_vars) {
-  p <- ggplot(encoded_df, aes_string(x = i, y = "log_price")) +
+  p <- ggplot(encoded_df, aes_string(x = i, y = "price")) +
     geom_point() +
     theme_bw() +
     labs(title = paste('Price vs', i), x = i, y = 'Price')
@@ -538,30 +503,35 @@ for (i in numeric_vars) {
 }
 ```
 
-The toriginal price column had a highly skewed distribution. This could cause problems for machine learning algorithms such as linear regression. A log transformation and removal of outliers made the distribution look much closer to normal.
+The price column had a highly skewed distribution. This could cause problems for machine learning algorithms such as linear regression. The BoxCox transformation and removal of outliers (after ) made the distribution look much closer to normal.
 
-```{r}
+```{r target_distribution, fig.keep="none"}
+aa_boxcox <- boxcox(lm((encoded_df$price+1) ~ 1))
+aa_lambda <- aa_boxcox$x[which.max(aa_boxcox$y)]
+aa_trans <- BoxCox(encoded_df$price+1, aa_lambda)
+encoded_df$box_price <- aa_trans
+
 # Create the distribution plot for `price`
 p1 <- ggplot(encoded_df, aes(x=price)) +
       geom_histogram(aes(y=..density..), binwidth=1, colour="black", fill="white") +
       geom_density(alpha=.2, fill="#FF6666") +
       ggtitle("Distribution of Price")
 
-# Create the distribution plot for log(1 + `price`)
-p2 <- ggplot(encoded_df, aes(x=log_price)) +
+# Create the distribution plot for BoxCox(price)
+p2 <- ggplot(encoded_df, aes(x=box_price)) +
       geom_histogram(aes(y=..density..), binwidth=1, colour="black", fill="white") +
       geom_density(alpha=.2, fill="#FF6666") +
-      ggtitle("Distribution of log(1 + Price)") +
-      xlab("log(1 + price)")
+      ggtitle("Distribution of transformed Price") +
+      xlab("BoxCox(price)")
 
-# Create a Q-Q plot for log(1 + `price`)
+# Create a Q-Q plot for BoxCox(price)
 p3 <- ggplot() +
-      stat_qq(aes(sample = log_price), data = encoded_df) +
-      stat_qq_line(aes(sample = log_price), data = encoded_df) +
-      ggtitle("Q-Q Plot of log(1 + Price)")
+      stat_qq(aes(sample = box_price), data = encoded_df) +
+      stat_qq_line(aes(sample = box_price), data = encoded_df) +
+      ggtitle("Q-Q Plot of BoxCox(price)")
 
 # Arrange the plots in a 1x3 grid
-grid.arrange(p1, p2, p3, ncol = 3)
+grid.arrange(p1, p2, p3, ncol = 2)
 
 ```
 
@@ -570,10 +540,10 @@ grid.arrange(p1, p2, p3, ncol = 3)
 
 The median prices of various neighborhood groups differed noticeably from one another. The common belief that Manhattan was a more expensive area was supported by the fact that the borough's median prices tend to be higher than those of other Manhattan neighborhoods. Compared to individual rooms and hotel rooms, entire homes and apartments were typically more expensive. There was a significant variance in the kind and caliber of these listings, as seen by the larger price variance for complete houses or apartments.
 
-```{r}
+```{r target_categor}
 # Plot target vs categorical
 for (i in factor_vars) {
-  p <- ggplot(encoded_df, aes_string(x = i, y = "log_price")) +
+  p <- ggplot(encoded_df, aes_string(x = i, y = "price")) +
     geom_boxplot() +
     theme_bw() +
     labs(title = paste('Price vs', i), x = i, y = 'Price')
@@ -587,22 +557,18 @@ Possibility of Non-linear and Interaction Effects: Non-linear modeling or the ad
 
 ### 2.4 Correlation
 
-There was a positive correlation between higher `prices` and listings in `Manhattan` (0.15). This implied that Manhattan real estate was more expensive to list, probably as a result of the borough's popularity and strategic location. In contrast, there was a negative correlation (-0.09 and -0.07, respectively) between the price of listings in Brooklyn and Queens, suggesting that these boroughs typically had lower prices than Manhattan. 
+There was a positive correlation between higher `prices` and listings in `Manhattan` (0.21). This implied that Manhattan real estate was more expensive to list, probably as a result of the borough's popularity and strategic location. In contrast, there was a negative correlation (-0.11) between the price of listings in Brooklyn and Queens, suggesting that these boroughs typically had lower prices than Manhattan. 
 
-`Price` and `entire homes/apartments` had a positive correlation (0.10), indicating that the price of these listings was usually higher than that of shared accommodations. A negative correlation (-0.11) indicated that private rooms were typically less expensive than whole houses or apartments. 
+`Price` and `entire homes/apartments` had a positive correlation (0.17), indicating that the price of these listings was usually higher than that of shared accommodations. A negative correlation (-0.17) indicated that private rooms were typically less expensive than whole houses or apartments. 
 
-Price and longitude had a negative correlation (-0.11), which could suggest that listings in Brooklyn and Queens, which are further east, were typically less expensive.
-The positive correlation between latitude and price was less strong (0.03), indicating a potential trend toward slightly higher listing prices for listings further north.
+Price and longitude had a negative correlation (-0.16), which could suggest that listings in Brooklyn and Queens, which are further east, were typically less expensive.
+The positive correlation between latitude and price was less strong (0.04), indicating a potential trend toward slightly higher listing prices for listings further north.
 
-The neighbourhood group encodings exhibited significant negative correlations with each other. For example, the correlation between neighbourhood group Manhattan and neighbourhood group Brooklyn was -0.56, and the correlation between neighbourhood group Manhattan and neighbourhood group Queens was -0.36. Given that these were mutually exclusive categories, this was expected.
+The neighbourhood group encodings exhibited significant negative correlations with each other. For example, the correlation between neighbourhood group Manhattan and neighbourhood group Brooklyn was -0.67, and the correlation between neighbourhood group Manhattan and neighbourhood group Queens was -0.37. Given that these were mutually exclusive categories, this was expected.
 
-Correlations between room type encodings and neighbourhood groups were also strongly negative. For example, there was a negative correlation (-0.81) between room_type_Private room and room_type_Entire home/apt. This suggested that these kinds of rooms belong to exclusive groups.
+Correlations between room type encodings and neighbourhood groups were also strongly negative. For example, there was a negative correlation (-0.97) between room_type_Private room and room_type_Entire home/apt. This suggested that these kinds of rooms belong to exclusive groups.
 
-There was a significant inverse relationship between latitude and longitude (-0.48). This implied a geographical trend that was geographically accurate for New York City: moving west corresponds with moving north (higher latitude).
-
-The relationship between availability_365 and calculated_host_listings_count was moderately positive (0.22). This could suggest that hosts who had a larger number of listings were typically more available all year long.
-
-There existed a moderate negative correlation (-0.11) between number_of_reviews and calculated_host_listings_count. This could indicate that hosts with fewer properties tended to have listings that had received more reviews, either because they had been active on the platform longer or because they concentrated more on a single listing.
+There existed a moderate negative correlation (-0.14) between number_of_reviews and calculated_host_listings_count. This could indicate that hosts with fewer properties tended to have listings that had received more reviews, either because they had been active on the platform longer or because they concentrated more on a single listing.
 
 
 ```{r corr}
@@ -618,8 +584,7 @@ corrplot(coeff, tl.cex = 0.5, tl.col="black", method = 'color', addCoef.col = "b
 
 ```{r corr_numbers}
 tst <- encoded_df %>% dplyr::select(where(is.numeric))
-tst <- tst[,-17]
-kable(cor(drop_na(tst))[,17], "html", escape = F, col.names = c('Coefficient')) %>%
+kable(cor(drop_na(tst))[,3], "html", escape = F, col.names = c('Coefficient')) %>%
   kable_styling("striped", full_width = F) %>%
   column_spec(1, bold = T) 
 ```
@@ -627,7 +592,7 @@ kable(cor(drop_na(tst))[,17], "html", escape = F, col.names = c('Coefficient')) 
 
 ## 3. Split data
 
-Finally, we split our data into train (75%) and test (25%) datasets to evaluate model performance before we proceeded to prediction. The train data contained 29089 records, test data 9545.
+Finally, we split our data into train (75%) and test (25%) datasets to evaluate model performance before we proceeded to prediction. The train data contained 29180 records, test data 9562.
 
 ```{r split}
 # random seed
@@ -643,22 +608,22 @@ dim(train_data)
 dim(test_data)
 ```
 
-As outliers showed, the were extremely high prices per night (`$30,000`) in contrast to the mean (`$216`). As a result, the price distribution was right-skewed. This indicated that the skewness was positive. To lessen the skewness, log transformation was used after splitting the data for training and testing to avoid data leakage. Transformation by log+1 was preferable because division by zero was problematic. The same transformation was appled to `minimum_nights`. We also applied the Box-Cox Transformation to `number_of_reviews, reviews_per_month, calculated_host_listings_count, number_of_reviews_ltm` due to their right-skeweness to stabilize variance and improve its normalcy. We added 1 in boxCox() to ensure all values were positive, which is necessary for the Box-Cox transformation
+As outliers showed, there were extremely high prices per night (`$30,000`) in contrast to the mean (`$216`). As a result, the price distribution was right-skewed. This indicated that the skewness was positive. To lessen the skewness, BoxCox transformation was used after splitting the data for training and testing to avoid data leakage. Transformation by log+1 for `minimum_nights` was preferable because division by zero was problematic. We also applied the Box-Cox Transformation to `number_of_reviews, reviews_per_month, calculated_host_listings_count, number_of_reviews_ltm` due to their right-skeweness to stabilize variance and improve its normalcy. We added 1 in boxCox() to ensure all values were positive, which is necessary for the Box-Cox transformation. The data had to be transformed in order for linear modeling methods like Lasso Regression and Linear Regression to work. We wanted to increase the precision and dependability of our models, so we normalized the distribution of these important variables. By helping linear models meet their assumptions, the transformed data improves the performance of the models.
 
 ```{r transform, fig.keep="none"}
-# Log transformation for target variable to remove skeweness
 train_transformed <- train_data
 test_transformed <- test_data
 
-# Log transformation for "price","minimum_nights"
-cols_transform <- c("price", "minimum_nights")
+# Log transformation for minimum_nights"
+cols_transform <- c("minimum_nights") #"price", 
 
 for (i in cols_transform) {
   train_transformed[[i]]<- log(train_transformed[[i]]+1)
   test_transformed[[i]]<- log(test_transformed[[i]]+1)
 }
 
-# Boxcox transformation for "number_of_reviews", "reviews_per_month", "calculated_host_listings_count", "number_of_reviews_ltm", "availability_ratio"
+
+# Boxcox transformation for "number_of_reviews", "reviews_per_month", "calculated_host_listings_count", "number_of_reviews_ltm", "price"
 b_boxcox <- boxcox(lm((train_transformed$number_of_reviews+1) ~ 1))
 b_lambda <- b_boxcox$x[which.max(b_boxcox$y)]
 b_trans <- BoxCox(train_transformed$number_of_reviews+1, b_lambda)
@@ -687,11 +652,18 @@ e_trans <- BoxCox(train_transformed$number_of_reviews_ltm+1, e_lambda)
 train_transformed$number_of_reviews_ltm <- e_trans 
 e_trans <- BoxCox(test_transformed$number_of_reviews_ltm+1, e_lambda)
 test_transformed$number_of_reviews_ltm <- e_trans 
+
+aa_boxcox <- boxcox(lm((train_transformed$price+1) ~ 1))
+aa_lambda <- aa_boxcox$x[which.max(aa_boxcox$y)]
+aa_trans <- BoxCox(train_transformed$price+1, aa_lambda)
+train_transformed$price <- aa_trans
+aa_trans <- BoxCox(test_transformed$price+1, aa_lambda)
+test_transformed$price <- aa_trans 
 ```
 
 For linear regression models, these transformations aided in stabilizing the variance and improving the symmetry of the distributions. The data was better suited for predictive modeling after transformations.
 
-```{r cont_plot}
+```{r cont_plot_train}
 # Choose numeric variables
 numeric_vars <-c("price", "minimum_nights", "number_of_reviews", "reviews_per_month", "calculated_host_listings_count", "number_of_reviews_ltm", "availability_ratio")
 
@@ -712,7 +684,23 @@ for (i in 1:length(numeric_vars)) {
 grid.arrange(grobs = plots, ncol = 2)
 ```
 
+```{r distribution_transformed_target}
+# Create the distribution plot for `price`
+p1 <- ggplot(test_transformed, aes(x=price)) +
+      geom_histogram(aes(y=..density..), binwidth=1, colour="black", fill="white") +
+      geom_density(alpha=.2, fill="#FF6666") +
+      ggtitle("Distribution of Price")
 
+# Create a Q-Q plot for price
+p3 <- ggplot() +
+      stat_qq(aes(sample = price), data = test_transformed) +
+      stat_qq_line(aes(sample = price), data = test_transformed) +
+      ggtitle("Q-Q Plot of Price")
+
+# Arrange the plots in a 1x3 grid
+grid.arrange(p1, p3, ncol = 2)
+
+```
 
 ## 4. Models
 
@@ -721,77 +709,85 @@ grid.arrange(grobs = plots, ncol = 2)
 For the first model, Linear Regression, we dropped:
 - `neighbourhood_group, room_type` features as we encoded them and used encoded columns instead of these originals. 
 
-- `availability_365, log_price` as we created new feature availability ratio and transformed price with log after splitting data to train and test, so we didn't need the previous column log_price.
+- `availability_365, box_price` as we created new feature availability ratio and transformed price with BoxCox after splitting data to train and test, so we didn't need the previous column box_price.
 
 - `number_of_reviews, reviews_per_month` as they were highly correlated, we kept only number of reviews for the last 12 months.
 
 - `neighbourhood` in order to avoid high dimensionality.
 
-```{r}
+```{r data_for_lm}
 # remove some features from the model
 train_model_1 <- train_transformed %>% 
-                dplyr::select(-c(neighbourhood, neighbourhood_group, room_type, availability_365, number_of_reviews, reviews_per_month, log_price)) 
+                dplyr::select(-c(neighbourhood, neighbourhood_group, room_type, availability_365, number_of_reviews, reviews_per_month, box_price)) 
 
 test_model_1 <- test_transformed %>% 
-                dplyr::select(-c(neighbourhood, neighbourhood_group, room_type, availability_365, number_of_reviews, reviews_per_month, log_price)) 
+                dplyr::select(-c(neighbourhood, neighbourhood_group, room_type, availability_365, number_of_reviews, reviews_per_month, box_price)) 
 ```
 
 We first configured five-fold cross-validation. The training data was divided into five parts, and the model was trained and validated five times, using the remaining parts as the training set and a different part as the validation set each time. This made it easier to estimate the model's performance with greater accuracy. After, the Linear Regression model was trained.
 
-```{r model_1}
+```{r lm_model}
 set.seed(42)
 
 # setup cross-validation
 ctrl <- trainControl(method = "cv", number = 5)
 
 # fit a regression model and use k-fold CV to evaluate performance
-model_1 <- train(price ~ ., data = train_model_1, method = "lm", trControl = ctrl)
+lm_model <- train(price ~ ., data = train_model_1, method = "lm", trControl = ctrl)
 ```
 
 
 #### Model Performance
 
-How well the model fit the data was shown in the summary of residuals. The residuals were between -1.9809 and 3.7455. A somewhat symmetric residual distribution around zero was suggested by a median near -0.0850, which is generally a positive indicator.
+How well the model fit the data was shown in the summary of residuals. The residuals were between -3.3851 and 1.1955. A somewhat symmetric residual distribution around zero was suggested by a median near -0.0187, which is generally a positive indicator.
 
-The F-statistic was `1,941`, the adjusted R-squared was `0.464`, and out of the 14 variables, all had statistically significant p-values. The model was statistically significant, as indicated by the F-statistic and p-value of less than 2.2e-16.The adjusted R2 indicated that only 46% of the variance in the response variable could be explained by the predictor variables. Even though the model explained a sizable percentage of the variance in log_price, a sizable portion remained unaccounted for by the model.
+The F-statistic was `1,966`, the adjusted R-squared was `0.485`, and out of the 14 variables, all had statistically significant p-values. The model was statistically significant, as indicated by the F-statistic and p-value of less than 2.2e-16.The adjusted R2 indicated that only 48% of the variance in the response variable could be explained by the predictor variables. Even though the model explained a sizable percentage of the variance in price, a sizable portion remained unaccounted for by the model.
 
-Residual standard error was `0.579`. It provided an estimate of the residuals' standard deviation and, consequently, the typical error in log_price prediction made by the model.
+Residual standard error was `0.1879`. It provided an estimate of the residuals' standard deviation and, consequently, the typical error in price prediction made by the model.
 
-RMSE was `0.557`, showing how far predictions fell from measured true values using Euclidean distance.
+RMSE was `0.181`, indicating the average error magnitude. Less RMSE is preferable.
 
 A positive coefficient indicated that the predictor and the outcome variable were positively correlated.
-For example, the room_type_entire_home_apt had a positive coefficient of about 0.815. This suggested that the log_price of Airbnb listings for complete homes or apartments was approximately 0.815 units higher than the log_price of listings for other types of listings (like shared rooms or hotel rooms), holding all other variables constant.
-When a coefficient was positive, it indicated that the outcome variable rised along with the predictor.
+For example, the room_type_entire_home_apt had a positive coefficient of about 0.298. This suggested that the price of Airbnb listings for complete homes or apartments was approximately 0.298 units higher than the price of listings for other types of listings (like shared rooms or hotel rooms), holding all other variables constant. Neighborhood group Manhattan listings were more expensive than those in other areas.
+When a coefficient was positive, it indicated that the outcome variable raised along with the predictor.
 
-
-A  negative relationship between the predictor and the outcome variable was indicated by a negative coefficient. For instance, latitude variable had a coefficient of roughly -1.136. This implied that, if all other variables stayed the same, the log_price of Airbnb listings decreased as latitude rised, which in the context of geographic coordinates usually meant moving northward.
+A  negative relationship between the predictor and the outcome variable was indicated by a negative coefficient. For instance,both, longitude and latitude, had sizable negative coefficients, price was significantly influenced by geography. A listing's precise location was important, since certain areas (usually central or well-liked neighborhoods) bring higher prices.
 A negative coefficient indicated a decrease in the outcome variable with an increase in the predictor.
 
-```{r, fig.height=4}
-print(model_1)
-summary(model_1)
+`MAPE` (Mean Absolute Percentage Error) was 4.69. This showed that the model's predictions were, on average, 4.69% off from the actual values. `SMAPE` (Symmetric Mean Absolute Percentage Error) was 4.68.
+By normalizing based on both expected and actual values, SMAPE changes MAPE. The model's good SMAPE of 4.68% indicated that it was fairly accurate. `MASE` (Mean Absolute Scaled Error) was 0.539. In other words, the model's forecasts were, on average, 46.1% more accurate than the naive forecasts. 
+`MPE` (Mean Percentage Error) showed how biased the predictions were, -0.594. A negative value indicated a slight under-forecasting tendency in the model.
+
+These model performance metrics were rather low, indicating a respectable level of predictive accuracy.
+
+```{r predict_lm, fig.height=4}
+print(lm_model)
+summary(lm_model)
 
 # validate and calculate RMSE
-model_1.valid <- predict(model_1, newdata = test_model_1)
-model_1.eval <- bind_cols(target = test_model_1$price, predicted=unname(model_1.valid))
-model_1.rmse <- sqrt(mean((model_1.eval$target - model_1.eval$predicted)^2)) 
+lm_model.valid <- predict(lm_model, newdata = test_model_1)
+lm_model.eval <- bind_cols(target = test_model_1$price, predicted=unname(lm_model.valid))
+lm_model.rmse <- sqrt(mean((lm_model.eval$target - lm_model.eval$predicted)^2)) 
 
 # plot targets vs predicted
-model_1.eval %>%
+lm_model.eval %>%
   ggplot(aes(x = target, y = predicted)) +
   geom_point(alpha = .3) +
   geom_smooth(method="lm", color='grey', alpha=.3, se=FALSE) +
-  labs(title=paste('RMSE:',round(model_1.rmse,1)))
+  labs(title=paste('RMSE:',round(lm_model.rmse,1)))
 ```
 
-```{r metrics_1}
+```{r metrics_lm}
+# Calculate metrics mape, smape, mase, mpe, rmse
 multi_metric <- metric_set(mape, smape, mase, mpe, yardstick::rmse)
-model1_df <- model_1.eval %>% multi_metric(truth=target, estimate=predicted)
-b <- summary(model_1)
+model1_df <- lm_model.eval %>% multi_metric(truth=target, estimate=predicted)
+b <- summary(lm_model)
+model1_df
 ```
 
 
-```{r res_table_1}
+```{r res_table_lm}
+# Add results to table
 results_lm_tbl <- tibble(
                       Model = character(),
                       mape = numeric(), 
@@ -799,7 +795,6 @@ results_lm_tbl <- tibble(
                       mase = numeric(), 
                       mpe = numeric(), 
                       "RMSE" = numeric(),
-                      AIC = numeric(),
                       "Adjusted R2" = numeric()
                 )
 
@@ -810,7 +805,6 @@ results_lm_tbl <- results_lm_tbl %>% add_row(tibble_row(
                       mase = model1_df[[3,3]],
                       mpe = model1_df[[4,3]],
                       "RMSE" = model1_df[[5,3]],
-                      AIC = AIC(model_1$finalModel),
                       "Adjusted R2" = b$adj.r.squared
                      ))
 ```
@@ -827,14 +821,22 @@ The plot indicated potential problems with equal variance, as the residuals' spr
 
 Leverage versus Residuals made it easier to spot outliers that unreasonably affected the model. Influential points could be those that were prominently located above the dashed Cook's distance lines or far to the right of the plot. A few of the points had high leverage and/or high Cook's distance, which made them potentially significant.
 
-
 The diagnostic plots implied that there could be some transgressions of the homoscedasticity and residual normality assumptions of linear regression. Taking into account variable transformations or using models more resilient to such problems may be beneficial. The Residuals vs. Leverage plot's indication of influential points may call for additional research. To determine whether these data points should be eliminated or whether there is a significant explanation for their status as outliers. 
 
-```{r diag_plots_1}
-model_1_final <- model_1$finalModel
+```{r diag_plots_lm}
+# Plot model's assumptions
+lm_model_final <- lm_model$finalModel
 
 par(mfrow = c(2, 2))
-plot(lmModel)
+plot(lm_model_final)
+```
+
+Given the significant results of the Jarque-Bera (JB) test, it is possible that the residuals were not normally distributed. This could an impact on some statistical tests' dependability. The residuals could exhibit heteroscedasticity, which indicated that the variance of the residuals was not constant across all levels of the independent variables, according to the Breusch-Pagan test.
+
+```{r test_lm}
+# Test for residuals
+JarqueBera.test(lm_model_final$residuals)
+bptest(lm_model_final) 
 ```
 
 The variance inflation factor (VIF) quantified the extent to which multicollinearity with other model predictors inflated the variance of a regression coefficient. As a general rule, high multicollinearity was indicated by a VIF greater than 5 or 10.
@@ -843,8 +845,9 @@ High VIF values indicated that variables such as availability_ratio, latitude, l
 Because it could inflate the standard errors of the coefficients and reduce the reliability of the model estimates, this collinearity could be problematic.
 The VIF only implied that a variable was not offering unique information when there were other variables present; it did not, however, implied that a variable was unimportant.
 
-```{r vif_lm1, fig.height=4}
-vif_values <- vif(model_1_final)
+```{r vif_lm, fig.height=4}
+# Variable importance plot
+vif_values <- vif(lm_model_final)
 vif_values <- rownames_to_column(as.data.frame(vif_values), var = "var")
 
 vif_values %>%
@@ -857,17 +860,17 @@ vif_values %>%
 
 ### 4.2 Model 2 - Lasso
 
-To perform lasso regression, we used functions from the glmnet package. This package required the response variable to be a vector and the set of predictor variables to be of the class data.matrix. We used the transformed train and test data (with log and boxcox transformations) without choosing particular variables.
+To perform Lasso Regression, we used functions from the glmnet package. This package required the response variable to be a vector and the set of predictor variables to be of the class data.matrix. We used the transformed train and test data (with log and boxcox transformations) without choosing particular variables.
 
-```{r}
+```{r data_for_lasso}
 # Transform to matrix
 set.seed(42)
-t0 <- train_transformed %>% dplyr::select(-c(log_price, availability_365))
+t0 <- train_transformed %>% dplyr::select(-c(availability_365, neighbourhood_group, room_type, neighbourhood, box_price))
 X <- model.matrix(price ~ ., data=t0)[,-1]
 Y <- t0$price
 ```
 
-Next, we used the glmnet() function to fit the lasso regression model and specify alpha=1. To determine what value to use for lambda, we performed k-fold cross-validation and identify the lambda value that produced the lowest test mean squared error (MSE). 
+Next, we used the glmnet() function to fit the Lasso Regression model and specify alpha=1. To determine what value to use for lambda, we performed k-fold cross-validation and identify the lambda value that produced the lowest test mean squared error (MSE). 
 
 The following attribute settings were selected for the model:
 
@@ -879,7 +882,7 @@ The following attribute settings were selected for the model:
 
 The coefficients extracted using lambda.min minimized the mean cross-validated error.
 
-```{r}
+```{r best_lambda}
 # Fit lasso model
 set.seed(42)
 lasso_cv <- cv.glmnet(
@@ -899,133 +902,227 @@ best_lambda
 plot(lasso_cv) 
 ```
 
-#### Model Performance
-
 After, we analyzed the final model produced by the optimal lambda value.
 
-```{r}
+```{r lasso_model}
 #find coefficients of best model
-lasso_model <- glmnet(X, Y, alpha = 1, lambda = best_lambda)
+lasso_model <- glmnet(X, Y, alpha = 1, lambda = best_lambda, standardize = TRUE)
 #coef(lasso_model)
 
+
+# Show table with coeff of Lasso model
 as.data.frame(as.matrix(coef(lasso_model, s = "lambda.min"))) %>%
   arrange(desc(s1)) %>%
   nice_table(cap='Model Coefficients', cols='Est')
 ```
 
 
-```{r}
-t1 <- test_transformed %>% dplyr::select(-c(log_price, availability_365))
+#### Model Performance
+
+The analysis of `residuals` and other performance metrics demonstrated how well the Lasso Regression model fit the data. The residuals showed a somewhat symmetric distribution around zero, with a range of -3.395 to 1.194. A median near -0.0187 highlighted this symmetry, which is typically a positive indicator that the model did not consistently overestimate or underestimate the prices.
+
+The `adjusted R-squared` value of 0.489 indicated that the predictor variables in the model could account for roughly 43.6% of the price variance. Although significant, this value also suggested that the model was unable to account for a sizable portion of the variability in Airbnb prices.
+
+The RMSE value of `0.181` provided a measure of the typical deviation of the predicted values from the actual prices. Understanding the average magnitude of prediction errors required an understanding of this metric.
+
+A positive correlation between the predictor and the outcome variable was indicated by positive coefficients. When all else was equal, a variable with a positive coefficient, for example, would imply that the price increased in tandem with the predictor's value. Similar to the Linear model, neighbourhood_group_manhattan, room_type_entire_home_apt, and room_type_hotel_room were key predictors with significant positive coefficients.
+
+On the other hand, a negative coefficient denoted a bad relationship. For instance, if the latitude variable had a negative coefficient, this would suggest that, assuming all other variables remain constant, moving northward, or increasing latitude, could be linked to a drop in price.
+
+`MAPE` was 4.68. This showed that the model's predictions were, on average, 4.7% off from the actual values. `SMAPE` was 4.66. By normalizing based on both expected and actual values, SMAPE changes MAPE. The model's good SMAPE of 4.66% indicated that it was fairly accurate. `MASE` was 0.537. `MPE` was -0.589. A negative value indicated a slight under-forecasting tendency in the model.
+
+Overall, even though the Lasso model offered insightful information and a high level of predictive accuracy, there was still opportunity for improvement, perhaps through the use of more sophisticated modeling techniques or the investigation of new or different predictor variables.
+
+```{r predict_lasso}
+t1 <- test_transformed %>% dplyr::select(-c(availability_365, neighbourhood_group, room_type, neighbourhood, box_price))
 X_test <- model.matrix(price ~ ., data=t1)[,-1]
 y_test <- t1[,"price"] 
-```
 
-```{r}
-y_pred <- predict(
-  lasso_model, 
-  newx = X_test,
-  s = best_lambda)
-```
-
-```{r}
 # validate and calculate RMSE
-model_2.valid <- predict(model_1, newdata = test_model_1)
-model_2.eval <- bind_cols(target = test_model_1$price, predicted=unname(model_1.valid))
-model_2.rmse <- sqrt(mean((model_1.eval$target - model_1.eval$predicted)^2)) 
+lasso_model.valid <- predict(lasso_model, newx = X_test, s = best_lambda)
+lasso_model.eval <- bind_cols(target = y_test, predicted=unname(lasso_model.valid))
+lasso_model.eval$predicted <- as.numeric(lasso_model.eval$predicted)
+lasso_model.rmse <- sqrt(mean((lasso_model.eval$target - lasso_model.eval$predicted)^2)) 
 
 # plot targets vs predicted
-model_1.eval %>%
+lasso_model.eval %>%
   ggplot(aes(x = target, y = predicted)) +
   geom_point(alpha = .3) +
   geom_smooth(method="lm", color='grey', alpha=.3, se=FALSE) +
-  labs(title=paste('RMSE:',round(model_1.rmse,1)))
+  labs(title=paste('RMSE:',round(lasso_model.rmse,1)))
 ```
 
-```{r}
-t2 <- t1
-t2$price_pred <- y_pred[,1]
+```{r metrics_lasso}
+# Calculate metrics mape, smape, mase, mpe, rmse
+lasso_model_df <- lasso_model.eval %>% multi_metric(truth=target, estimate=predicted)
+lasso_model_df
+```
 
-m_df <- t2 %>% multi_metric(truth=price, estimate=price_pred)
-m_df
+```{r adj_r_2_lasso}
+# R-squared and Adjusted R-squared
+predictions_train <- predict(lasso_model, newx = X, s = best_lambda)
+
+SSE <- sum((predictions_train - Y)^2)
+SST <- sum((Y - mean(Y))^2)
+r_squared_lasso <- 1 - SSE / SST
+
+n <- length(Y)
+p <- ncol(X)
+adj_r_squared_lasso <- 1 - (1 - r_squared_lasso) * (n - 1) / (n - p - 1)
+adj_r_squared_lasso
+```
+
+```{r stat_resid}
+# Predictions and residuals
+residuals_lasso <- Y - predictions_train
+
+# Calculate statistics for residuals
+min(residuals_lasso)
+max(residuals_lasso)
+median(residuals_lasso)
+mean(residuals_lasso)
+sd(residuals_lasso)
 ```
 
 ```{r res_table_2}
+# Add results to table
 results_lm_tbl <- results_lm_tbl %>% add_row(tibble_row(
                       Model = "Model 2: Lasso",
-                      mape = m_df[[1,3]],
-                      smape = m_df[[2,3]],
-                      mase = m_df[[3,3]],
-                      mpe = m_df[[4,3]],
-                      "RMSE" = m_df[[5,3]],
-                      AIC = NA,
-                      "Adjusted R2" = NA
+                      mape = lasso_model_df[[1,3]],
+                      smape = lasso_model_df[[2,3]],
+                      mase = lasso_model_df[[3,3]],
+                      mpe = lasso_model_df[[4,3]],
+                      "RMSE" = lasso_model_df[[5,3]],
+                      "Adjusted R2" = adj_r_squared_lasso
                      ))
 ```
 
 
 #### Model Assumptions
 
-```{r diag_plots_2}
-model_2_final <- model_2$finalModel
+Several diagnostic plots were used to evaluate the Lasso Regression model in order to identify potential problems and evaluate important assumptions. To verify nonlinearity and homoscedasticity, the Residual vs. Fitted plot is essential. To show homoscedasticity, the residuals should ideally be dispersed randomly around a horizontal line. The residuals of the Lasso model showed no discernible pattern and seemed to be scattered, indicating a reasonable level of homoscedasticity. On the other hand, the lack of a discernible pattern suggested that nonlinearity might not be a major problem.
+
+The majority of the residuals in the Lasso model's Q-Q plot fell along a straight line, indicating that the residuals were roughly normally distributed. A few deviations exist, especially in the tails, but these are typical of real-world data.
+
+Possible problems with equal variance were highlighted by the Scale-Location plot, which aids in assessing the distribution of residuals across the range of fitted values. Heteroscedasticity, or the inconsistency of residual variance across the range of predicted values, may be indicated by a discernible spread in the residuals as the fitted values increased.
+
+All of the diagnostic plots suggested possible violations of the residual normality and homoscedasticity assumptions. In light of these results, investigating variable transformations or taking into account models more resistant to these kinds of problems might be helpful. The Residuals vs. Leverage plot's indications call for additional research into the key points to determine whether or not they should be eliminated and whether there is a compelling reason why they are considered outliers.
+
+The reliability of some statistical inferences made from the model may be impacted by the residuals' potential non-normal distribution, according to the significant findings of the Jarque-Bera (JB) test. 
+
+```{r diag_plots_lasso}
+# Plot for Linearity and Homoscedasticity check
+plot(predictions_train, residuals_lasso, xlab = "Predicted", ylab = "Residuals", main = "Residual vs. Fitted - Lasso")
+abline(h = 0, col = "red")
+
 
 par(mfrow = c(2, 2))
-plot(lmModel)
+
+qqnorm(residuals_lasso, main = 'Normal Q-Q')
+
+plot(predictions_train, sqrt(abs(residuals_lasso)), xlab = 'Predicted', ylab = 'Sqrt(|Residuals|)', main = 'Scale-Location')
+
+
 ```
 
-```{r vif_lm2, fig.height=4}
-vif_values <- vif(model_1_final)
-vif_values <- rownames_to_column(as.data.frame(vif_values), var = "var")
+Given the significant results of the Jarque-Bera (JB) test, it is possible that the residuals were not normally distributed. This could an impact on some statistical tests' dependability. The residuals could exhibit heteroscedasticity, which indicated that the variance of the residuals was not constant across all levels of the independent variables, according to the Breusch-Pagan test.
 
-vif_values %>%
-  ggplot(aes(y=vif_values, x=var)) +
-  coord_flip() + 
-  geom_hline(yintercept=5, linetype="dashed", color = "red") +
-  geom_bar(stat = 'identity', width=0.3 ,position=position_dodge()) 
+```{r test_lasso}
+JarqueBera.test(residuals_lasso)
 ```
 
-Descriptive Statistics Overview:
-Latitude & Longitude: These are geographic coordinates, which might be useful to understand the spatial distribution of prices.
-Price: There's a significant range in prices, with a maximum of $30,000, which seems quite high. The mean is $215.89, but the median is much lower at $135, indicating a right-skewed distribution.
-Minimum Nights: Majority of listings require a 30-night stay, but some listings require up to 500 nights, which is quite high.
-Number of Reviews: Varies widely, indicating different levels of popularity or longevity of listings.
-Reviews per Month: Some listings have high activity, while others have none.
-Calculated Host Listings Count: Indicates how many listings each host manages, ranging from 1 to 602.
-Availability_365: Ranges from 0 to 365 days, indicating varying levels of availability throughout the year.
-Number of Reviews LTM (Last Twelve Months): Provides recent activity level of the listing.
-Encoded Neighbourhood Groups & Room Types: These are categorical variables encoded as binary, useful for regression analysis.
-Next steps in the analysis process:
+A study was conducted to measure the level of multicollinearity between the model's predictors using the Variance Inflation Factor (VIF). Significant multicollinearity is indicated by high VIF values, usually greater than 5 or 10. High VIF values were found in this model for variables like availability_ratio, latitude, longitude, and neighborhood_group_manhattan, indicating possible collinearity with other predictors. The reliability of the model's estimates may be jeopardized by this collinearity, which could inflate the standard errors of the coefficients. It's crucial to remember that a high VIF does not always imply that a variable is unimportant; rather, it simply suggests that it does not offer unique information when combined with other variables.
 
-Feature Selection:
-We need to determine which features are most relevant to predicting the price. The encoded neighborhood groups and room types are definitely important. Other factors like location (latitude and longitude), availability, and host listing count may also play a significant role.
 
-------------------------------------------------------------------------
+```{r vif_lasso, fig.height=4}
 
-Methodologies:
+vip(lasso_model, num_features=20 ,geom = "col", include_type=TRUE, lambda = "lambda.min")
 
-Week 4: Classification: Naive Bayes
+coeffs.table <- coeff2dt(fitobject = lasso_model, s = "lambda.min")
 
-Employ Naive Bayes classification to predict Airbnb listing categories (entire apartment, private room, shared room) based on listing characteristics.
+coeffs.table %>% mutate(name = fct_reorder(name, desc(coefficient))) %>%
+ggplot() +
+  geom_col(aes(y = name, x = coefficient, fill = {coefficient > 0})) +
+  xlab(label = "") +
+  ggtitle(expression(paste("Lasso Coefficients with ", lambda, " = 0.0275"))) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=0.5),legend.position = "none")
 
-Week 12: Resampling and Model Selection
+```
 
-Utilize k-fold cross-validation and train-test split techniques to evaluate the performance of various regression models (linear regression, ridge regression, Lasso regression) in predicting Airbnb listing prices.
-Analysis:
 
-Exploratory Data Analysis: Visualize and summarize the data to understand the distribution of variables and identify potential relationships between them.
+## 5. Model selection
 
-Feature Engineering: Create new features from existing data to capture additional information and improve the predictive power of the models.
+In order to concentrate on other factors for price prediction, Linear Regression and Lasso models models disregarded availability_365, neighborhood_group, room_type, and neighborhood characteristics.
 
-Model Building: Train and evaluate various regression models using the prepared data and the selected methodologies.
+The residuals of the Linear Regression model showed a distribution centered around zero, indicating no significant bias in predictions. Similar to the Linear Regression model, the Lasso model's residuals also indicated a balanced distribution around zero, suggesting an unbiased prediction model. The existence of multicollinearity in the Linear Regression model may inflate the variance of coefficient estimates, resulting in less trustworthy interpretations, even though Lasso Regression helps to address multicollinearity by penalizing coefficients of correlated predictors.
 
-Model Validation: Assess the performance of the final model using unseen data to validate its generalizability.
 
-Conclusions:
+The RMSE values (0.181) for both models were nearly the same, indicating comparable levels of price prediction accuracy. In terms of average prediction error, MAPE and SMAPE values were almost equal due to their small differences (4.7 for Linear regression, 4.68 for Lasso Regression). Though, Lasso Regression showed slightly better results.
 
-Identify the most significant factors influencing Airbnb listing prices in New York City.
-Develop a predictive model that accurately estimates Airbnb listing prices based on the identified factors.
-Provide insights into pricing strategies and market trends for Airbnb hosts in New York City.
-Business Impact:
+The error distribution and bias of both models exhibited similar tendencies, with very close MASE and MPE values (0.539/-0.594 for Linear Regression, 0.537/-0.589 for Lasso regession). Lasso Regression showed slightly better results. Both models' marginally negative MPEs suggest a propensity to underpredict prices.
 
-Help Airbnb hosts optimize their listing prices to maximize revenue and occupancy rates.
-Assist potential Airbnb guests in making informed decisions based on price and listing characteristics.
-Provide valuable insights to policymakers and urban planners for understanding the dynamics of the short-term rental market in New York City.
+The remarkably close Adjusted R-squared values (48.9% for Lasso and 48.5% for Linear Regression) indicated that the proportion of variance in the data explained by each model was similar.
+The similar distribution of the residuals for both models suggested that they were equally successful in terms of prediction bias and error variance.
+
+The performance of the Lasso Regression model was somewhat better than of the Linear Regression model. This choice was based on its slightly superior performance metrics and its ability to handle a large number of features through automatic feature selection.  The breaking of important presumptions, however, raised concerns and could have an impact on how reliable the predictions and interpretations were. Further refinement or exploration of different modeling techniques might be needed for better results.
+
+For the future research directions, we can investigate more intricate models such as neural networks, Random Forest, or Gradient Boosting Machines to enhance prediction accuracy and better manage non-linearity. Time-series analysis and a closer look at how prices evolve over time may shed light on seasonal patterns and price swings. By incorporating more precise geospatial data, it may be possible to identify regional trends and provide more neighborhood-specific insights.
+
+
+```{r compare_table}
+results_lm_tbl %>% 
+  nice_table(cap='Model Comparison') %>% 
+  scroll_box(width='100%')
+```
+
+## 6. Conclusion
+
+Despite the fact that both models performed admirably, choosing between them depended on specific requirements and data characteristics. The linear regression model is appropriate when interpretability is important and the dataset has little multicollinearity and is well-understood. Conversely, the Lasso model performs better with datasets that have a high number of features, particularly if some of those features may not be very important, because it automatically selects features. As a result, if the dataset is carefully selected and model simplicity and interpretability are crucial, then linear regression would be preferable. However, Lasso Regression is a better choice for a more complex dataset with lots of features because it can perform feature selection and prevent overfitting. As a result, a Lasso Regression model was chosen for its feature selection capabilities, Lasso Regression proved to be an effective tool in handling multicollinearity and streamlining the model by eliminating irrelevant predictors. The solution provides a robust starting point for understanding and predicting Airbnb prices in New York City. While the models demonstrate moderate predictive accuracy, there is room for improvement, particularly in addressing the assumptions of linear models.  With a better understanding of the major variables influencing rental prices, hosts can use the model's insights to optimize their pricing strategy and possibly boost income and occupancy rates. Renters can improve their decision-making process by using the model's insights to identify competitive pricing and learn what factors might result in higher rental costs. These insights can be used by Airbnb for market analysis, to pinpoint areas with high demand, and to provide hosts customized pricing recommendations. The results of the model can help investors understand the dynamics of the rental market in various neighborhoods and pinpoint profitable areas to invest in. With the use of this data, policymakers can better understand how Airbnb rentals affect the local housing market, which will help with regulation and urban planning.
+
+
+## References
+
+1. Nwanganga, F., & Chapple, M. (2020). _Practical Machine Learning in R._ https://doi.org/10.1002/9781119591542
+
+2. Get the Data. (n.d.). http://insideairbnb.com/get-the-data
+
+3. Faraway, J. J. (2014). *Linear Models with R, Second Edition.* CRC Press.
+
+4.  Sheather, S. (2009). *A Modern Approach to Regression with R.* Springer Science & Business Media.
+
+5.  James, Gareth, Daniela Witten, Trevor Hastie, and Robert Tibshirani. 2014. *An Introduction to Statistical Learning: With Applications in R.* Springer Publishing Company, Incorporated
+
+6.  Faraway, J. J. (2016). *Extending the Linear Model with R: Generalized Linear, Mixed Effects and Nonparametric Regression Models.* CRC Press.
+
+
+
+**Essay: Predictive Modeling of Airbnb Prices in New York City**
+
+This essay outlines the journey from data preparation to the selection of predictive models for Airbnb listings in New York City, based on a dataset with diverse variables influencing rental prices. Source:
+http://insideairbnb.com/get-the-data
+
+The initial dataset included 38,792 records, each representing an Airbnb listing with 18 different attributes. Key variables included geographical coordinates, room type, and various features related to the host and the property. The target variable for our analysis was price, representing the cost per night of a listing.
+
+The first step in our analysis involved extensive data cleaning and preparation. We transformed categorical variables like neighbourhood_group, neighbourhood, and room_type into factor variables and converted last_review dates into a numerical format by calculating the number of days from the earliest review. Missing values in reviews_per_month were imputed with zeros, and columns not critical to our analysis, such as id, host_name, and license, were dropped. To handle the high dimensionality and multicollinearity, we applied one-hot encoding to neighbourhood_group and room_type, eliminating redundant categories to prevent multicollinearity. We also created a new feature, availability_ratio, to provide a clearer understanding of each listing's availability throughout the year.
+
+Through exploratory data analysis, we observed significant variations in listing prices and minimum night requirements. These insights were crucial in understanding the market dynamics and in guiding our modeling decisions. Analysis of latitude and longitude revealed clustering of listings, indicating popular areas within the city. This spatial distribution could be crucial in understanding price variations. Different room types and their prevalence across various neighborhoods were examined. The distribution highlighted trends in preferred lodging types, potentially influencing pricing strategies. Exploration of the price variable showed a wide range of values, with certain outliers indicating extremely high or low prices. This necessitated further scrutiny and potential transformation for more accurate modeling. The newly created availability_ratio indicated varied patterns of listing availability, which could correlate with pricing strategies employed by hosts. A thorough examination of correlations between variables helped in identifying multicollinearity issues, especially between geographical coordinates and certain neighborhood groups.
+
+We split the data into training (75%) and testing (25%) sets, ensuring a fair evaluation of our models. The training set included 29,180 records, while the test set comprised 9,562 records with 22 columns in each. Given the skewed distribution of several variables like price, minimum_nights, and reviews_per_month, we applied BoxCox transformations to stabilize variance and improve normality. The minimum_nights column underwent a log+1 transformation to address potential division by zero issues.The data had to be transformed in order for linear modeling methods like Lasso Regression and Linear Regression to work. We wanted to increase the precision and dependability of our models, so we normalized the distribution of these important variables. By helping linear models meet their assumptions, the transformed data improves the performance of the models.
+
+**Linear Regression*: Our first model was a Linear Regression, tailored to capture the linear relationships between the predictors and the target variable. We excluded features that were highly correlated or caused high dimensionality (neighbourhood_group, room_type, availability_365, number_of_reviews, reviews_per_month). The model underwent 5-fold cross-validation to assess its generalizability. The final model demonstrated an adjusted R-squared of 48.5%, indicating a moderate fit to the data. The model was statistically significant, as indicated by the F-statistic (1,966) and p-value of less than 2.2e-16. RMSE was `0.181`, indicating the average error magnitude. The most important features to increase price were room_type_entire_home_apt and Neighborhood group Manhattan; to decrease, longitude and latitude. `MAPE` (Mean Absolute Percentage Error) was 4.69. This showed that the model's predictions were, on average, 4.69% off from the actual values. `SMAPE` (Symmetric Mean Absolute Percentage Error) was 4.68.
+By normalizing based on both expected and actual values, SMAPE changes MAPE. The model's good SMAPE of 4.68% indicated that it was fairly accurate. `MASE` (Mean Absolute Scaled Error) was 0.539. In other words, the model's forecasts were, on average, 46.1% more accurate than the naive forecasts. `MPE` (Mean Percentage Error) showed how biased the predictions were, -0.594. A negative value indicated a slight under-forecasting tendency in the model. These model performance metrics were rather low, indicating a respectable level of predictive accuracy. However, diagnostic plots (Q-Q plot, residuals vs fitted plot, Jarque-Bera and Breusch-Pagan tests) suggested possible violations of homoscedasticity and normality assumptions, pointing to the need for further refinement. The variance inflation factor (VIF) quantified the extent to which multicollinearity with other model predictors inflated the variance of a regression coefficient.
+
+**Lasso Regression**: Next, we implemented a Lasso Regression model, which is particularly effective in feature selection and in handling multicollinearity. The model was fine-tuned using 10-fold cross-validation to identify the optimal lambda value for regularization. The Lasso model showed an adjusted R-squared of 48.9%, slightly outperforming the Linear Regression model. The RMSE value of `0.181` provided a measure of the typical deviation of the predicted values from the actual prices. Understanding the average magnitude of prediction errors required an understanding of this metric. The most important features to increase price were similar to the Linear model, neighbourhood_group_manhattan, room_type_entire_home_apt, and room_type_hotel_room were key predictors with significant positive coefficients. The latitude variable had a negative coefficient, this would suggest that, assuming all other variables remain constant, moving northward, or increasing latitude, could be linked to a drop in price. `MAPE` was 4.68. This showed that the model's predictions were, on average, 4.7% off from the actual values. `SMAPE` was 4.66. By normalizing based on both expected and actual values, SMAPE changes MAPE. The model's good SMAPE of 4.66% indicated that it was fairly accurate. `MASE` was 0.537. `MPE` was -0.589. A negative value indicated a slight under-forecasting tendency in the model. However, similar to the Linear Regression, it displayed potential issues with residual assumptions, underscoring the need for careful interpretation of results.
+
+In order to concentrate on other factors for price prediction, Linear Regression and Lasso models models disregarded availability_365, neighborhood_group, room_type, and neighborhood characteristics.
+
+The residuals of the Linear Regression model showed a distribution centered around zero, indicating no significant bias in predictions. Similar to the Linear Regression model, the Lasso model's residuals also indicated a balanced distribution around zero, suggesting an unbiased prediction model. The existence of multicollinearity in the Linear Regression model may inflate the variance of coefficient estimates, resulting in less trustworthy interpretations, even though Lasso Regression helps to address multicollinearity by penalizing coefficients of correlated predictors.
+
+The RMSE values (0.181) for both models were nearly the same, indicating comparable levels of price prediction accuracy. In terms of average prediction error, MAPE and SMAPE values were almost equal due to their small differences (4.7 for Linear regression, 4.68 for Lasso Regression). Though, Lasso Regression showed slightly better results. The error distribution and bias of both models exhibited similar tendencies, with very close MASE and MPE values (0.539/-0.594 for Linear Regression, 0.537/-0.589 for Lasso regession). Lasso Regression showed slightly better results. Both models' marginally negative MPEs suggest a propensity to underpredict prices. The remarkably close Adjusted R-squared values (48.9% for Lasso and 48.5% for Linear Regression) indicated that the proportion of variance in the data explained by each model was similar. The similar distribution of the residuals for both models suggested that they were equally successful in terms of prediction bias and error variance.
+
+The performance of the Lasso Regression model was somewhat better than of the Linear Regression model. This choice was based on its slightly superior performance metrics and its ability to handle a large number of features through automatic feature selection.  The breaking of important presumptions, however, raised concerns and could have an impact on how reliable the predictions and interpretations were. Further refinement or exploration of different modeling techniques might be needed for better results.
+
+For the future research directions, we can investigate more intricate models such as neural networks, Random Forest, or Gradient Boosting Machines to enhance prediction accuracy and better manage non-linearity. Time-series analysis and a closer look at how prices evolve over time may shed light on seasonal patterns and price swings. By incorporating more precise geospatial data, it may be possible to identify regional trends and provide more neighborhood-specific insights.
+
+Despite the fact that both models performed admirably, choosing between them depended on specific requirements and data characteristics. The linear regression model is appropriate when interpretability is important and the dataset has little multicollinearity and is well-understood. Conversely, the Lasso model performs better with datasets that have a high number of features, particularly if some of those features may not be very important, because it automatically selects features. As a result, if the dataset is carefully selected and model simplicity and interpretability are crucial, then linear regression would be preferable. However, Lasso Regression is a better choice for a more complex dataset with lots of features because it can perform feature selection and prevent overfitting. As a result, a Lasso Regression model was chosen for its feature selection capabilities, Lasso Regression proved to be an effective tool in handling multicollinearity and streamlining the model by eliminating irrelevant predictors. The solution provides a robust starting point for understanding and predicting Airbnb prices in New York City. While the models demonstrate moderate predictive accuracy, there is room for improvement, particularly in addressing the assumptions of linear models.  With a better understanding of the major variables influencing rental prices, hosts can use the model's insights to optimize their pricing strategy and possibly boost income and occupancy rates. Renters can improve their decision-making process by using the model's insights to identify competitive pricing and learn what factors might result in higher rental costs. These insights can be used by Airbnb for market analysis, to pinpoint areas with high demand, and to provide hosts customized pricing recommendations. The results of the model can help investors understand the dynamics of the rental market in various neighborhoods and pinpoint profitable areas to invest in. With the use of this data, policymakers can better understand how Airbnb rentals affect the local housing market, which will help with regulation and urban planning.
